@@ -65,5 +65,5 @@ A rule that stops a known-volatile part of a response from counting as a change 
 _Avoid_: Filter, ignore pattern, exclude pattern (exclusion is about Pages), diff setting
 
 **Report**:
-The per-Check summary of all Diffs, plus Pages that were new, vanished, or failed during that Check.
+The view of one finished Check: its changed Pages (non-empty Diffs) ranked by significance, plus the Pages that were new, vanished, retired, or had a fetch failure in that Check. Unchanged Pages are only counted. Every finished Check has one, however many fetches failed.
 _Avoid_: Summary, digest, result
