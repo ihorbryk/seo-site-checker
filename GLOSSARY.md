@@ -53,12 +53,16 @@ A fetch of a Page during a Check that received no HTTP response (timeout, DNS, T
 _Avoid_: Error snapshot, failed Snapshot
 
 **SEO fields**:
-The values extracted from a Snapshot (title, meta description, canonical, robots, h1, hreflang, redirects) that are diffed as structured data.
+The values extracted from a Snapshot that are diffed as structured data: from the HTML, title, meta description, canonical, meta robots, h1, hreflang, page language, Open Graph tags and structured-data types; from the response, status, content type, X-Robots-Tag and redirect target. Every occurrence is kept, so duplicates are visible.
 _Avoid_: Metadata, tags
 
 **Diff**:
-The difference between a Page's Snapshot and that Page's immediately previous Snapshot.
+The difference between a Page's Snapshot and that Page's immediately previous Snapshot, after Noise rules are applied. A Diff is empty when nothing differs after noise is removed. A Page's first Snapshot has no Diff.
 _Avoid_: Change, delta, comparison
+
+**Noise rule**:
+A rule that stops a known-volatile part of a response from counting as a change in a Diff: either a header name to ignore, or a pattern in the HTML to mask. Some are built in and fixed; the rest belong to a Project. Each Check uses the Noise rules as they were when it started. Noise rules never apply to SEO fields.
+_Avoid_: Filter, ignore pattern, exclude pattern (exclusion is about Pages), diff setting
 
 **Report**:
 The per-Check summary of all Diffs, plus Pages that were new, vanished, or failed during that Check.
