@@ -41,8 +41,12 @@ A Page the user removed from the Page pool. It is never fetched or brought back 
 _Avoid_: Deleted page, excluded page (exclusion comes from exclude patterns, not removal)
 
 **Check**:
-One pass over a Project's Page pool, started by its schedule or manually.
+One pass over a Project's Page pool, started by its schedule or manually. A Project has at most one active Check at a time. A Check ends finished, or cancelled by the user, which leaves it partial.
 _Avoid_: Run, crawl, scan, job
+
+**Fetch**:
+One attempt by a Check to retrieve one Page. It ends in a Snapshot, a Fetch failure, or a skip. A Page has at most one Fetch per Check.
+_Avoid_: Job, task, request
 
 **Snapshot**:
 What one fetch of one Page during a Check stored when an HTTP response was received (any status): status, response headers, raw HTML (HTML responses only), timing. Snapshots are kept forever.
@@ -65,5 +69,5 @@ A rule that stops a known-volatile part of a response from counting as a change 
 _Avoid_: Filter, ignore pattern, exclude pattern (exclusion is about Pages), diff setting
 
 **Report**:
-The view of one finished Check: its changed Pages (non-empty Diffs) ranked by significance, plus the Pages that were new, vanished, retired, or had a fetch failure in that Check. Unchanged Pages are only counted. Every finished Check has one, however many fetches failed.
+The view of one finished Check: its changed Pages (non-empty Diffs) ranked by significance, plus the Pages that were new, vanished, retired, or had a fetch failure in that Check. Unchanged Pages are only counted. Every finished or cancelled Check has one, however many Fetches failed; a cancelled Check's Report is marked partial.
 _Avoid_: Summary, digest, result
