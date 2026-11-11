@@ -39,7 +39,7 @@ func twoChecks(t *testing.T, home fakesite.Response, change func(site *fakesite.
 	return s, first, second
 }
 
-func html(body string, h ...string) fakesite.Response {
+func diffPage(body string, h ...string) fakesite.Response {
 	r := fakesite.Response{Body: body}
 	if len(h) > 0 {
 		r.Header = map[string][]string{}
@@ -51,7 +51,7 @@ func html(body string, h ...string) fakesite.Response {
 }
 
 func TestAFirstSnapshotHasNoDiffAndTheReportCountsNothingChanged(t *testing.T) {
-	s, first, _ := twoChecks(t, html(pageA), func(*fakesite.Site) {})
+	s, first, _ := twoChecks(t, diffPage(pageA), func(*fakesite.Site) {})
 	if got := changedRows(first); len(got) != 0 {
 		t.Errorf("first Check lists changed Pages: %v", got)
 	}
@@ -61,8 +61,8 @@ func TestAFirstSnapshotHasNoDiffAndTheReportCountsNothingChanged(t *testing.T) {
 }
 
 func TestATitleChangeRanksSEOWithBeforeAfter(t *testing.T) {
-	_, first, second := twoChecks(t, html(pageA), func(site *fakesite.Site) {
-		site.Set("/", html(strings.Replace(pageA, "<title>Shop</title>", "<title>Store</title>", 1)))
+	_, first, second := twoChecks(t, diffPage(pageA), func(site *fakesite.Site) {
+		site.Set("/", diffPage(strings.Replace(pageA, "<title>Shop</title>", "<title>Store</title>", 1)))
 	})
 	if got := changedRows(first); len(got) != 0 {
 		t.Errorf("first Check: %v", got)
@@ -79,8 +79,8 @@ func TestATitleChangeRanksSEOWithBeforeAfter(t *testing.T) {
 }
 
 func TestANoindexRanksCritical(t *testing.T) {
-	_, _, second := twoChecks(t, html(pageA), func(site *fakesite.Site) {
-		site.Set("/", html(strings.Replace(pageA, "<head>", `<head><meta name="robots" content="noindex">`, 1)))
+	_, _, second := twoChecks(t, diffPage(pageA), func(site *fakesite.Site) {
+		site.Set("/", diffPage(strings.Replace(pageA, "<head>", `<head><meta name="robots" content="noindex">`, 1)))
 	})
 	if got := changedRows(second); len(got) != 1 || got[0] != "https://shop.test/|critical" {
 		t.Errorf("changed = %v", got)
@@ -91,8 +91,8 @@ func TestANoindexRanksCritical(t *testing.T) {
 }
 
 func TestAHeaderOnlyChangeRanksHeaders(t *testing.T) {
-	_, _, second := twoChecks(t, html(pageA, "X-Powered-By", "a"), func(site *fakesite.Site) {
-		site.Set("/", html(pageA, "X-Powered-By", "b"))
+	_, _, second := twoChecks(t, diffPage(pageA, "X-Powered-By", "a"), func(site *fakesite.Site) {
+		site.Set("/", diffPage(pageA, "X-Powered-By", "b"))
 	})
 	if got := changedRows(second); len(got) != 1 || got[0] != "https://shop.test/|headers" {
 		t.Errorf("changed = %v", got)
@@ -100,8 +100,8 @@ func TestAHeaderOnlyChangeRanksHeaders(t *testing.T) {
 }
 
 func TestABodyOnlyChangeRanksBody(t *testing.T) {
-	_, _, second := twoChecks(t, html(pageA), func(site *fakesite.Site) {
-		site.Set("/", html(strings.Replace(pageA, "hello", "goodbye", 1)))
+	_, _, second := twoChecks(t, diffPage(pageA), func(site *fakesite.Site) {
+		site.Set("/", diffPage(strings.Replace(pageA, "hello", "goodbye", 1)))
 	})
 	if got := changedRows(second); len(got) != 1 || got[0] != "https://shop.test/|body" {
 		t.Errorf("changed = %v", got)
@@ -112,8 +112,8 @@ func TestADateAndNonceOnlyChangeIsAnEmptyDiff(t *testing.T) {
 	withNonce := func(n string) string {
 		return strings.Replace(pageA, "<body>", `<body><script nonce="`+n+`">var a=1</script>`, 1)
 	}
-	s, _, second := twoChecks(t, html(withNonce("aaa"), "Date", "Mon, 01 Jan 2024 00:00:00 GMT"), func(site *fakesite.Site) {
-		site.Set("/", html(withNonce("bbb"), "Date", "Tue, 02 Jan 2024 00:00:00 GMT"))
+	s, _, second := twoChecks(t, diffPage(withNonce("aaa"), "Date", "Mon, 01 Jan 2024 00:00:00 GMT"), func(site *fakesite.Site) {
+		site.Set("/", diffPage(withNonce("bbb"), "Date", "Tue, 02 Jan 2024 00:00:00 GMT"))
 	})
 	if got := changedRows(second); len(got) != 0 {
 		t.Errorf("changed = %v", got)
@@ -138,14 +138,14 @@ func TestChangedPagesAreSortedByTierThenURL(t *testing.T) {
 		if path != "/" {
 			testfixtures.Page(t, s.Pool, p, path)
 		}
-		site.Set(path, html(body))
+		site.Set(path, diffPage(body))
 	}
 	s.WaitForCheck(s.RunCheck(p))
 
-	site.Set("/", html(strings.Replace(pageA, "hello", "bye", 1)))                                            // body
-	site.Set("/a", html(strings.Replace(pageA, "<title>Shop", "<title>Other", 1)))                            // seo
-	site.Set("/b", html(strings.Replace(pageA, "<head>", `<head><meta name="robots" content="noindex">`, 1))) // critical
-	site.Set("/c", html(strings.Replace(pageA, "<title>Shop", "<title>Other", 1)))                            // seo
+	site.Set("/", diffPage(strings.Replace(pageA, "hello", "bye", 1)))                                            // body
+	site.Set("/a", diffPage(strings.Replace(pageA, "<title>Shop", "<title>Other", 1)))                            // seo
+	site.Set("/b", diffPage(strings.Replace(pageA, "<head>", `<head><meta name="robots" content="noindex">`, 1))) // critical
+	site.Set("/c", diffPage(strings.Replace(pageA, "<title>Shop", "<title>Other", 1)))                            // seo
 	// /d unchanged
 	report := s.WaitForCheck(s.RunCheck(p))
 
