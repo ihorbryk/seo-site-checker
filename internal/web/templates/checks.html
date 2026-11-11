@@ -110,7 +110,7 @@
 {{range .History}}<tr>
 <td><a href="/c/{{.CheckID}}">#{{.CheckID}}</a><div class="muted small">{{.Started}}</div></td>
 <td>{{.Result}}{{range .Events}} <span class="badge">{{.}}</span>{{end}}
-{{if .Chain}}<div class="mono small chain">{{range $i, $u := .Chain}}{{if $i}} → {{end}}{{$u}}{{end}}</div>{{end}}</td>
+{{if .Chain}}<div class="mono small chain">{{.Chain}}</div>{{end}}</td>
 <td>{{if .Tier}}{{if ne .Tier "empty"}}<span class="badge tier tier-{{.Tier}}">{{.Tier}}</span>{{range .Badges}}<span class="badge">{{.}}</span>{{end}}{{end}}{{end}}{{if .Note}}<span class="muted">{{.Note}}</span>{{end}}</td>
 <td>{{if .SnapshotID}}<a href="/s/{{.SnapshotID}}">Snapshot</a>{{end}}{{if .DiffLink}} · <a href="/d/{{.SnapshotID}}">Diff</a>{{end}}</td>
 </tr>{{end}}

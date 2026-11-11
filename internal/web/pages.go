@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,12 +15,6 @@ import (
 
 // maxOrphanStreak is the number of orphaned Checks that retires a Page.
 const maxOrphanStreak = 3
-
-// redirectChain, when set, returns the hops of the redirect chain that starts
-// at a redirecting Snapshot (URLs in order, the Snapshot's own Page first).
-// The Page history shows the chain under a redirecting Check; with no function
-// set it shows nothing.
-var redirectChain func(ctx context.Context, q *dbgen.Queries, snapshotID int64) ([]string, error)
 
 // poolFilters are the Page pool tab's filters, in display order; "" is all.
 var poolFilters = []struct{ Key, Label string }{
@@ -207,7 +200,7 @@ type historyRow struct {
 	SnapshotID int64
 	DiffLink   bool
 	Events     []string
-	Chain      []string
+	Chain      string // redirect chain, empty when the Snapshot is not a redirect
 }
 
 func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
@@ -257,11 +250,13 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 			} else {
 				row.Note = "first Snapshot"
 			}
-			if redirectChain != nil && h.Status.Int32 >= 300 && h.Status.Int32 < 400 {
-				if row.Chain, err = redirectChain(ctx, s.q, h.SnapshotID.Int64); err != nil {
+			if h.Status.Int32 >= 300 && h.Status.Int32 < 400 {
+				chain, err := s.checkChain(ctx, h.CheckID, pg.ProjectID, pg.Domain, pg.Url)
+				if err != nil {
 					s.fail(w, r, err)
 					return
 				}
+				row.Chain = chain.Label()
 			}
 		case "failure":
 			row.Result = "failed: " + h.FailureKind.String

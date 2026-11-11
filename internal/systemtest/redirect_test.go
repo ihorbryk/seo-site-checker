@@ -55,6 +55,10 @@ func TestAnOnDomainRedirectChainIsFetchedInOneCheck(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM links l JOIN snapshots s ON s.id = l.snapshot_id JOIN pages p ON p.id = s.page_id WHERE p.url = 'https://shop.test/a'`); n != 1 {
 		t.Errorf("/a has %d outgoing links, want exactly 1", n)
 	}
+	history := s.Page(s.Get("/pg/" + itoa(s.PageID(p, "https://shop.test/a"))))
+	if chain := text(history, "#history .chain"); chain != "https://shop.test/a → https://shop.test/b → https://shop.test/c" {
+		t.Errorf("Page history chain = %q", chain)
+	}
 }
 
 func TestARedirectLoopTerminates(t *testing.T) {
@@ -202,5 +206,9 @@ func TestAChainRowMarksALoop(t *testing.T) {
 	}
 	if chain := text(report, "#changed .chain"); chain != "https://shop.test/b → https://shop.test/a → https://shop.test/b (loop)" {
 		t.Errorf("chain = %q", chain)
+	}
+	history := s.Page(s.Get("/pg/" + itoa(s.PageID(p, "https://shop.test/b"))))
+	if chain := text(history, "#history .chain"); !strings.HasSuffix(chain, "https://shop.test/b → https://shop.test/a → https://shop.test/b (loop)") {
+		t.Errorf("Page history chain = %q", chain)
 	}
 }
