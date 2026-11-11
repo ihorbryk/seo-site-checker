@@ -6,7 +6,8 @@
 <tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th></tr>
 {{range .Checks}}<tr>
 <td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td>{{.Trigger}}</td>
-<td><span class="badge">{{.State}}</span>{{if .Active}} <span class="live"></span>{{end}}</td>
+<td><span class="badge">{{.State}}</span>{{if .Partial}}<span class="badge partial">partial</span>{{end}}{{if .Active}} <span class="live"></span>{{end}}
+{{if .Active}}<form hx-post="/c/{{.ID}}/cancel" action="/c/{{.ID}}/cancel" method="post" style="display:inline"><button class="btn">Cancel</button></form>{{end}}</td>
 <td>{{.Started}}</td><td>{{.Duration}}</td><td>{{.Fetched}} / {{.Known}}</td><td>{{.Failures}}</td>
 </tr>{{end}}
 </table>
@@ -18,7 +19,7 @@
 {{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
 <p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed.</p>
 {{end}}
-{{if .Cancelling}}<p class="muted">Cancelling…</p>{{end}}
+{{if .Cancelling}}<p class="muted">Cancelling…</p>{{else}}<form hx-post="/c/{{.CheckID}}/cancel" action="/c/{{.CheckID}}/cancel" method="post"><button class="btn">Cancel</button></form>{{end}}
 {{with .InFlight}}<ul class="lanes">{{range .}}<li class="mono">fetching {{.Url}}</li>{{end}}</ul>{{end}}
 </div>
 {{end}}
@@ -31,6 +32,7 @@
 
 {{define "report"}}
 <h1>Check #{{.Check.ID}} <span class="badge">{{.Check.State}}</span></h1>
+{{if eq .Check.State "cancelled"}}<p id="partial-banner" class="banner">This Check was cancelled, so its Report is partial: Pages not fetched are counted as skipped, and vanished and retired Pages were not counted.</p>{{end}}
 <table id="report-header">
 <tr><th>Started</th><td>{{.Started}}</td></tr>
 <tr><th>Finished</th><td>{{.Finished}}</td></tr>
@@ -59,6 +61,15 @@
 {{template "pageEvents" .Vanished}}
 <h2>Retired Pages</h2>
 {{template "pageEvents" .Retired}}
+<h2>Changed Pages</h2>
+<p id="counts"><b class="changed">{{.ChangedCount}}</b> changed, <b class="unchanged">{{.UnchangedCount}}</b> unchanged</p>
+{{if .Changed}}<table id="changed">
+<tr><th>Page</th><th>Tier</th><th>Changed</th><th>SEO</th></tr>
+{{range .Changed}}<tr><td class="mono"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
+<td><span class="badge tier tier-{{.Tier}}">{{.Tier}}</span></td>
+<td class="badges">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</td>
+<td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}</td></tr>{{end}}
+</table>{{end}}
 <h2>Fetch failures</h2>
 {{if .Failures}}<table id="failures">
 <tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
@@ -78,6 +89,6 @@
 {{template "tabs" .}}
 <table id="pages">
 <tr><th>Page</th><th>State</th><th>Last status</th></tr>
-{{range .Pages}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
+{{range .Pages}}<tr><td class="mono">{{.URL}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
 </table>
 {{end}}

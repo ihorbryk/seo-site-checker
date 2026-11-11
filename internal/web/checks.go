@@ -1,14 +1,19 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
+	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -52,6 +57,7 @@ type checkRow struct {
 	Fetched  int64
 	Known    int64
 	Failures int64
+	Partial  bool
 }
 
 func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +82,7 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, checkRow{
 			ID: c.ID, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
 			Started: formatTime(c.StartedAt.Time, c.StartedAt.Valid), Duration: duration(c.StartedAt, c.FinishedAt),
-			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures,
+			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures, Partial: c.State == check.StateCancelled,
 		})
 	}
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
@@ -99,7 +105,19 @@ func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": pages})
+	type poolRow struct {
+		URL, State string
+		LastStatus int32
+	}
+	rows := make([]poolRow, 0, len(pages))
+	for _, pg := range pages {
+		state := pg.State
+		if state == "active" && pg.Origin != "seed" && exclude.Excluded(p.ExcludePatterns, pg.Url) {
+			state = "matches exclude pattern"
+		}
+		rows = append(rows, poolRow{URL: pg.Url, State: state, LastStatus: pg.LastStatus})
+	}
+	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": rows})
 }
 
 func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +136,24 @@ func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	// With a Check already active, show its progress instead of a second one.
 	redirect(w, r, fmt.Sprintf("/c/%d", c.ID))
+}
+
+// cancelCheck asks a queued or running Check to stop. Cancelling a Check that
+// is not active does nothing.
+func (s *server) cancelCheck(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.idParam(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.q.GetCheck(r.Context(), id); err != nil {
+		s.notFoundOr(w, r, err)
+		return
+	}
+	if _, err := s.q.RequestCancel(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	redirect(w, r, fmt.Sprintf("/c/%d", id))
 }
 
 func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +230,65 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 			Rows []dbgen.ListPageEventsRow
 		}{sec.id, rows}
 	}
+	changed, err := s.changedPages(r, c.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	data["Changed"] = changed
+	counts, err := s.q.CountDiffs(r.Context(), c.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	data["ChangedCount"], data["UnchangedCount"] = counts.Changed, counts.Unchanged
 	s.render(w, r, "report", fmt.Sprintf("Check #%d", c.ID), crumbs, data)
+}
+
+// changedRow is one Page in the Changed Pages section.
+type changedRow struct {
+	SnapshotID int64
+	URL        string
+	Tier       string
+	Badges     []string
+	SEO        []string // "field: before → after"
+}
+
+func (s *server) changedPages(r *http.Request, checkID int64) ([]changedRow, error) {
+	rows, err := s.q.ListChangedPages(r.Context(), checkID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]changedRow, 0, len(rows))
+	for _, d := range rows {
+		row := changedRow{SnapshotID: d.SnapshotID, URL: d.Url, Tier: d.Tier}
+		for _, b := range []struct {
+			on   bool
+			name string
+		}{{d.StatusChanged, "status"}, {d.SeoChanged, "SEO"}, {d.HeadersChanged, "headers"}, {d.BodyChanged, "body"}} {
+			if b.on {
+				row.Badges = append(row.Badges, b.name)
+			}
+		}
+		var changes map[string]diff.SEOChange
+		if err := json.Unmarshal(d.SeoChanges, &changes); err != nil {
+			return nil, err
+		}
+		for _, k := range seo.Keys {
+			if c, ok := changes[k]; ok {
+				row.SEO = append(row.SEO, fmt.Sprintf("%s: %s → %s", k, seoValues(c.Before), seoValues(c.After)))
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func seoValues(vs []string) string {
+	if len(vs) == 0 {
+		return "(none)"
+	}
+	return strings.Join(vs, " | ")
 }
 
 // checkProgress is the htmx fragment polled while a Check runs. Once the

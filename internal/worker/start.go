@@ -7,6 +7,8 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -78,7 +80,21 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 			return err
 		}
 	}
-	pending, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID})
+	rawRules, err := diff.BuiltinRules().JSON() // per-Project Noise rules join these later
+	if err != nil {
+		return err
+	}
+	pages, err := q.ListPagesByProject(ctx, c.ProjectID)
+	if err != nil {
+		return err
+	}
+	var planned []int64
+	for _, pg := range pages {
+		if pg.State == "active" && (pg.Origin == "seed" || !exclude.Excluded(settings.ExcludePatterns, pg.Url)) {
+			planned = append(planned, pg.ID)
+		}
+	}
+	pending, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID, PageIds: planned})
 	if err != nil {
 		return err
 	}
@@ -102,7 +118,7 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 		}
 	}
 	err = q.MarkCheckRunning(ctx, dbgen.MarkCheckRunningParams{
-		ID: c.ID, Settings: rawSettings, NoiseRules: []byte("[]"), Lanes: int32(lanes),
+		ID: c.ID, Settings: rawSettings, NoiseRules: rawRules, Lanes: int32(lanes),
 	})
 	if err != nil {
 		return err

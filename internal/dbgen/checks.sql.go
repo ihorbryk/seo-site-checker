@@ -168,15 +168,20 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 
 const finishCheck = `-- name: FinishCheck :exec
 UPDATE checks
-SET state = 'finished', finished_at = now(),
+SET state = $1, finished_at = now(),
     count_snapshots = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'snapshot'),
     count_failures = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'failure'),
     count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
-WHERE checks.id = $1
+WHERE checks.id = $2
 `
 
-func (q *Queries) FinishCheck(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, finishCheck, id)
+type FinishCheckParams struct {
+	State string
+	ID    int64
+}
+
+func (q *Queries) FinishCheck(ctx context.Context, arg FinishCheckParams) error {
+	_, err := q.db.Exec(ctx, finishCheck, arg.State, arg.ID)
 	return err
 }
 
@@ -898,16 +903,18 @@ const planFetches = `-- name: PlanFetches :execrows
 INSERT INTO fetches (check_id, page_id)
 SELECT $1, pg.id FROM pages pg
 WHERE pg.project_id = $2 AND pg.state = 'active'
+  AND pg.id = ANY($3::bigint[])
 ORDER BY pg.id
 `
 
 type PlanFetchesParams struct {
 	CheckID   int64
 	ProjectID int64
+	PageIds   []int64
 }
 
 func (q *Queries) PlanFetches(ctx context.Context, arg PlanFetchesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, planFetches, arg.CheckID, arg.ProjectID)
+	result, err := q.db.Exec(ctx, planFetches, arg.CheckID, arg.ProjectID, arg.PageIds)
 	if err != nil {
 		return 0, err
 	}
@@ -940,6 +947,23 @@ func (q *Queries) ReactivateLinkedPages(ctx context.Context, pageIds []int64) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const requestCancel = `-- name: RequestCancel :execrows
+UPDATE checks
+SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
+    finished_at = CASE WHEN state = 'queued' THEN now() END
+WHERE id = $1 AND state IN ('queued', 'running')
+`
+
+// A queued Check has nothing to wind down and is cancelled at once; a running
+// one becomes `cancelling` and its lanes stop claiming Fetches.
+func (q *Queries) RequestCancel(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCancel, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const resetLinkedOrphanStreaks = `-- name: ResetLinkedOrphanStreaks :exec
@@ -1055,6 +1079,16 @@ type SetFetchJobParams struct {
 
 func (q *Queries) SetFetchJob(ctx context.Context, arg SetFetchJobParams) error {
 	_, err := q.db.Exec(ctx, setFetchJob, arg.ID, arg.JobID)
+	return err
+}
+
+const skipPendingFetches = `-- name: SkipPendingFetches :exec
+UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
+WHERE check_id = $1 AND state = 'pending'
+`
+
+func (q *Queries) SkipPendingFetches(ctx context.Context, checkID int64) error {
+	_, err := q.db.Exec(ctx, skipPendingFetches, checkID)
 	return err
 }
 

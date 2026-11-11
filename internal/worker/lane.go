@@ -11,6 +11,8 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/ihorbryk/seo-site-checker/internal/links"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
@@ -202,6 +204,11 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 			DurationMs:  dur,
 		})
 	}
+	prev, err := q.LatestSnapshotOfPage(ctx, f.PageID)
+	hasPrev := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	var sum []byte
 	if res.HasBody {
 		h := sha256.Sum256(res.Body)
@@ -217,9 +224,10 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	if err != nil {
 		return err
 	}
-	seoFields, err := json.Marshal(seo.Extract(seo.Input{
+	fields := seo.Extract(seo.Input{
 		Status: res.Status, Headers: res.Headers, Body: res.Body, HasBody: res.HasBody,
-	}))
+	})
+	seoFields, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
@@ -229,6 +237,12 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	})
 	if err != nil {
 		return err
+	}
+	if hasPrev {
+		current := diff.Side{Headers: res.Headers, SEO: fields, BodySHA256: sum, LoadBody: func() ([]byte, error) { return res.Body, nil }}
+		if err := storeDiff(ctx, q, chk, f, prev, current); err != nil {
+			return err
+		}
 	}
 	if err := q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: f.ID, DurationMs: dur}); err != nil {
 		return err
@@ -246,6 +260,20 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 	if err != nil {
 		return err
 	}
+	// Excluded URLs (by the Check's copy of the patterns) are not added to the
+	// pool and get no Fetch; the seed Page can't be excluded.
+	settings, err := check.ParseSettings(chk.Settings)
+	if err != nil {
+		return err
+	}
+	seed := "https://" + urlnorm.Host(f.Url) + "/"
+	kept := found.Links[:0:0]
+	for _, l := range found.Links {
+		if l.URL == seed || !exclude.Excluded(settings.ExcludePatterns, l.URL) {
+			kept = append(kept, l)
+		}
+	}
+	found.Links = kept
 	if len(found.Links) > 0 {
 		urls := make([]string, 0, len(found.Links))
 		for _, l := range found.Links {
@@ -318,4 +346,41 @@ func reactivate(ctx context.Context, q *dbgen.Queries, checkID int64, pageIDs []
 		return err
 	}
 	return q.InsertPageEvents(ctx, dbgen.InsertPageEventsParams{CheckID: checkID, Kind: "reactivated", PageIds: ids})
+}
+
+// storeDiff writes the Diff summary of a new Snapshot against the Page's
+// previous one, under the Noise rules the Check froze when it started.
+func storeDiff(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, prev dbgen.LatestSnapshotOfPageRow, current diff.Side) error {
+	rules, err := diff.ParseRules(chk.NoiseRules)
+	if err != nil {
+		return fmt.Errorf("check noise rules: %w", err)
+	}
+	var prevHeaders [][2]string
+	if err := json.Unmarshal(prev.Headers, &prevHeaders); err != nil {
+		return fmt.Errorf("baseline headers: %w", err)
+	}
+	var prevSEO seo.Fields
+	if err := json.Unmarshal(prev.SeoFields, &prevSEO); err != nil {
+		return fmt.Errorf("baseline seo fields: %w", err)
+	}
+	baseline := diff.Side{
+		Headers: prevHeaders, SEO: prevSEO, BodySHA256: prev.BodySha256,
+		LoadBody: func() ([]byte, error) {
+			return q.GetBodyContent(ctx, dbgen.GetBodyContentParams{ProjectID: f.ProjectID, Sha256: prev.BodySha256})
+		},
+	}
+	sum, err := diff.Summarize(baseline, current, rules)
+	if err != nil {
+		return err
+	}
+	changes, err := json.Marshal(sum.SEOChanges)
+	if err != nil {
+		return err
+	}
+	return q.InsertDiff(ctx, dbgen.InsertDiffParams{
+		SnapshotID: f.ID, BaselineID: prev.ID,
+		StatusChanged: sum.StatusChanged, HeadersChanged: sum.HeadersChanged,
+		SeoChanged: sum.SEOChanged, BodyChanged: sum.BodyChanged,
+		SeoChanges: changes, Tier: string(sum.Tier),
+	})
 }

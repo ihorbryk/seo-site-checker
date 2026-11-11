@@ -24,7 +24,7 @@ var UserAgentSuggestions = []string{
 }
 
 // RequestSettings are the Request settings the Settings tab's request form
-// edits. Exclude patterns are edited elsewhere.
+// edits.
 type RequestSettings struct {
 	Schedule      string
 	UserAgent     string
@@ -32,10 +32,12 @@ type RequestSettings struct {
 	TimeoutS      int
 	MaxParallel   int
 	RespectRobots bool
+	// ExcludePatterns are globs over path + query, see package exclude.
+	ExcludePatterns []string
 }
 
 // FieldErrors maps a form field ("schedule", "user_agent", "headers",
-// "timeout_s", "max_parallel") to its validation messages.
+// "timeout_s", "max_parallel", "exclude_patterns") to its validation messages.
 type FieldErrors map[string][]string
 
 // ParseRequestSettings validates the Request settings form. Header rows are the
@@ -76,6 +78,16 @@ func ParseRequestSettings(f url.Values) (RequestSettings, FieldErrors) {
 			errs["headers"] = append(errs["headers"], fmt.Sprintf("The value of %s must be a single line.", name))
 		default:
 			s.Headers = append(s.Headers, check.Header{Name: name, Value: value})
+		}
+	}
+	for _, line := range strings.Split(f.Get("exclude_patterns"), "\n") {
+		pat := strings.TrimSpace(line)
+		switch {
+		case pat == "":
+		case pat[0] != '/' && pat[0] != '*':
+			errs["exclude_patterns"] = append(errs["exclude_patterns"], fmt.Sprintf("Exclude pattern %q must start with / or *.", pat))
+		case !slices.Contains(s.ExcludePatterns, pat):
+			s.ExcludePatterns = append(s.ExcludePatterns, pat)
 		}
 	}
 	if len(errs) == 0 {
@@ -120,6 +132,7 @@ func SettingsOf(p dbgen.Project) (RequestSettings, error) {
 	return RequestSettings{
 		Schedule: p.Schedule, UserAgent: cs.UserAgent, Headers: cs.CustomHeaders,
 		TimeoutS: cs.TimeoutS, MaxParallel: cs.MaxParallel, RespectRobots: cs.RespectRobots,
+		ExcludePatterns: cs.ExcludePatterns,
 	}, nil
 }
 
@@ -130,6 +143,10 @@ func SaveRequestSettings(ctx context.Context, q *dbgen.Queries, projectID int64,
 	if headers == nil {
 		headers = []check.Header{}
 	}
+	patterns := s.ExcludePatterns
+	if patterns == nil {
+		patterns = []string{}
+	}
 	raw, err := json.Marshal(headers)
 	if err != nil {
 		return err
@@ -137,5 +154,6 @@ func SaveRequestSettings(ctx context.Context, q *dbgen.Queries, projectID int64,
 	return q.UpdateProjectRequestSettings(ctx, dbgen.UpdateProjectRequestSettingsParams{
 		ID: projectID, Schedule: s.Schedule, UserAgent: s.UserAgent, CustomHeaders: raw,
 		TimeoutS: int32(s.TimeoutS), MaxParallel: int32(s.MaxParallel), RespectRobots: s.RespectRobots,
+		ExcludePatterns: patterns,
 	})
 }

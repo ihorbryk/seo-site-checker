@@ -91,6 +91,17 @@ type Check struct {
 	RobotsFailureKind     pgtype.Text
 }
 
+type Diff struct {
+	SnapshotID     int64
+	BaselineID     int64
+	StatusChanged  bool
+	HeadersChanged bool
+	SeoChanged     bool
+	BodyChanged    bool
+	SeoChanges     []byte
+	Tier           string
+}
+
 type DroppedUrl struct {
 	CheckID int64
 	Url     string

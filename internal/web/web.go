@@ -64,6 +64,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.H
 	mux.HandleFunc("GET /p/{id}/settings/header-row", s.headerRow)
 	mux.HandleFunc("GET /p/{id}/pages", s.projectPages)
 	mux.HandleFunc("GET /c/{id}", s.checkPage)
+	mux.HandleFunc("POST /c/{id}/cancel", s.cancelCheck)
 	mux.HandleFunc("GET /c/{id}/progress", s.checkProgress)
 	mux.HandleFunc("GET /s/{id}", s.snapshotPage)
 	return chain(mux, recoverPanics(log), logRequests(log)), nil

@@ -32,6 +32,8 @@
 <input type="number" name="timeout_s" min="1" max="120" value="{{.S.TimeoutS}}" style="width:100px">
 <label>Max parallel requests <span class="muted small">1-10</span></label>
 <input type="number" name="max_parallel" min="1" max="10" value="{{.S.MaxParallel}}" style="width:100px">
+<label>Exclude patterns <span class="muted small">one per line, matched against path and query. <code>*</code> stays within one segment, <code>**</code> crosses segments, everything else is literal. Matching Pages are no longer fetched; the seed Page can't be excluded.</span></label>
+<textarea name="exclude_patterns" rows="4" placeholder="/private/**">{{.S.ExcludePatterns}}</textarea>
 <label><input type="checkbox" name="respect_robots" {{if .S.RespectRobots}}checked{{end}}> Respect robots.txt</label>
 <p><button class="btn primary">Save Request settings</button></p>
 <div id="saved-req">{{template "settingsResult" .}}</div>
