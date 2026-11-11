@@ -208,3 +208,37 @@ func (q *Queries) ListProjectsWithActivePages(ctx context.Context) ([]ListProjec
 	}
 	return items, nil
 }
+
+const updateProjectRequestSettings = `-- name: UpdateProjectRequestSettings :exec
+UPDATE projects SET
+    schedule = $1,
+    user_agent = $2,
+    custom_headers = $3,
+    timeout_s = $4,
+    max_parallel = $5,
+    respect_robots = $6
+WHERE id = $7
+`
+
+type UpdateProjectRequestSettingsParams struct {
+	Schedule      string
+	UserAgent     string
+	CustomHeaders []byte
+	TimeoutS      int32
+	MaxParallel   int32
+	RespectRobots bool
+	ID            int64
+}
+
+func (q *Queries) UpdateProjectRequestSettings(ctx context.Context, arg UpdateProjectRequestSettingsParams) error {
+	_, err := q.db.Exec(ctx, updateProjectRequestSettings,
+		arg.Schedule,
+		arg.UserAgent,
+		arg.CustomHeaders,
+		arg.TimeoutS,
+		arg.MaxParallel,
+		arg.RespectRobots,
+		arg.ID,
+	)
+	return err
+}

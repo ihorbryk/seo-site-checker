@@ -115,6 +115,15 @@ func (s *System) Exec(sql string, args ...any) {
 	}
 }
 
+// SaveRequestSettings submits the Project's Settings tab Request settings form
+// and fails the test unless it is accepted.
+func (s *System) SaveRequestSettings(p dbgen.Project, form url.Values) {
+	s.T.Helper()
+	if w := s.Post("/p/"+itoa(p.ID)+"/settings", form); w.Code != 200 {
+		s.T.Fatalf("save settings: status %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // Get requests path from the web app.
 func (s *System) Get(path string) *httptest.ResponseRecorder {
 	s.T.Helper()

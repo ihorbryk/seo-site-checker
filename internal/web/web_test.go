@@ -61,7 +61,7 @@ func TestEveryTemplateParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"shell", "home", "newProject", "project", "progress", "checkRunning", "report"} {
+	for _, name := range []string{"shell", "home", "newProject", "project", "progress", "checkRunning", "report", "settings", "headerRow"} {
 		if tmpl.Lookup(name) == nil {
 			t.Errorf("template %q is not defined", name)
 		}
