@@ -171,11 +171,21 @@ WHERE f.check_id = $1 AND pg.origin = 'seed';
 UPDATE checks SET orphan_counting_skipped = true WHERE id = $1;
 
 -- name: ResetLinkedOrphanStreaks :exec
--- Pages some other Page's Snapshot in the Check linked to are not orphaned.
+-- Pages some other Page's Snapshot in the Check linked to are not orphaned. A
+-- Page skipped in the Check sent no request, so its links come from its latest
+-- earlier Snapshot.
 UPDATE pages pg SET orphan_streak = 0
-WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND EXISTS (
-    SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
-    WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id);
+WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND (
+    EXISTS (
+        SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
+        WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
+    OR EXISTS (
+        SELECT 1 FROM fetches sf
+        JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
+                      ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
+        JOIN links l ON l.snapshot_id = last.id
+        WHERE sf.check_id = sqlc.arg(check_id) AND sf.outcome = 'skipped'
+          AND sf.page_id <> pg.id AND l.target_page_id = pg.id));
 
 -- name: CountOrphans :many
 -- Orphaned Pages (discovered, active, fetched in the Check, linked by no other
@@ -189,6 +199,13 @@ WHERE pg.state = 'active' AND pg.origin = 'discovered'
   AND NOT EXISTS (
       SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
       WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
+  AND NOT EXISTS (
+      SELECT 1 FROM fetches sf
+      JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
+                    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
+      JOIN links l ON l.snapshot_id = last.id
+      WHERE sf.check_id = sqlc.arg(check_id) AND sf.outcome = 'skipped'
+        AND sf.page_id <> pg.id AND l.target_page_id = pg.id)
 RETURNING pg.id, pg.orphan_streak;
 
 -- name: SetCheckEventCounts :exec
@@ -235,3 +252,18 @@ ORDER BY p.id;
 
 -- name: SetCheckCreatedAt :exec
 UPDATE checks SET created_at = $2 WHERE id = $1;
+
+-- name: SetCheckRobots :exec
+-- Stores the robots.txt the Check fetched; the status is NULL after a transport error.
+UPDATE checks
+SET robots_status = sqlc.narg(status), robots_body = sqlc.arg(body),
+    robots_fetched_at = now(), robots_failure_kind = sqlc.narg(failure_kind)
+WHERE id = sqlc.arg(id);
+
+-- name: FinishFetchSkipped :exec
+UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = $2 WHERE id = $1;
+
+-- name: ListSkippedFetches :many
+SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
+WHERE f.check_id = $1 AND f.outcome = 'skipped'
+ORDER BY p.url;

@@ -163,6 +163,19 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data["Dropped"] = dropped
+	if c.RobotsFetchedAt.Valid {
+		data["RobotsUnreachable"] = check.RobotsUnreachable(int(c.RobotsStatus.Int32), c.RobotsFailureKind.String)
+		data["RobotsBody"] = string(c.RobotsBody)
+	}
+	if r.URL.Query().Get("show") == "skipped" {
+		skipped, err := s.q.ListSkippedFetches(r.Context(), c.ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		data["ShowSkipped"] = true
+		data["Skipped"] = skipped
+	}
 	for _, sec := range []struct {
 		key, id string
 		kinds   []string

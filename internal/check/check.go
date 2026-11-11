@@ -34,6 +34,15 @@ func Active(state string) bool {
 	return state == StateQueued || state == StateRunning || state == StateCancelling
 }
 
+// RobotsUnreachable reports whether the robots.txt a Check stored (status 0
+// when none, failureKind empty unless the fetch got no response) is
+// unreachable in the RFC 9309 sense: a transport error or a 5xx. A Check that
+// should have a robots.txt and has none counts as unreachable. Anything else,
+// 4xx included, is readable (a 4xx allows everything).
+func RobotsUnreachable(status int, failureKind string) bool {
+	return failureKind != "" || status == 0 || status >= 500
+}
+
 // Header is one custom request header.
 type Header struct {
 	Name  string `json:"name"`

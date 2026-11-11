@@ -38,13 +38,21 @@
 <tr><th>Trigger</th><td>{{.Check.Trigger}}</td></tr>
 <tr><th>Fetched</th><td class="fetched">{{.Check.CountSnapshots}}</td></tr>
 <tr><th>Failed</th><td class="failed">{{.Check.CountFailures}}</td></tr>
-<tr><th>Skipped</th><td class="skipped">{{.Check.CountSkipped}}</td></tr>
+<tr><th>Skipped</th><td class="skipped"><a href="/c/{{.Check.ID}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
 <tr><th>New Pages</th><td class="new-pages">{{.Check.CountNew}}</td></tr>
 <tr><th>Vanished Pages</th><td class="vanished-count">{{.Check.CountVanished}}</td></tr>
 <tr><th>Retired Pages</th><td class="retired-count">{{.Check.CountRetired}}</td></tr>
 <tr><th>Dropped URLs</th><td class="dropped">{{.Dropped}}</td></tr>
 </table>
 {{if .Check.OrphanCountingSkipped}}<p id="orphan-banner" class="banner">The seed Page was not fetched, so no links were seen: vanished and retired Pages were not counted in this Check.</p>{{end}}
+{{if .RobotsUnreachable}}<p id="robots-banner" class="banner">robots.txt could not be read, so every Page was skipped in this Check.</p>{{end}}
+{{if .ShowSkipped}}<h2>Skipped Pages</h2>
+{{if .Skipped}}<table id="skipped-list">
+<tr><th>Page</th><th>Reason</th></tr>
+{{range .Skipped}}<tr><td class="mono">{{.Url}}</td><td>{{.SkipReason.String}}</td></tr>{{end}}
+</table>{{else}}<p class="muted">None.</p>{{end}}
+{{end}}
+{{if .RobotsBody}}<details id="robots-copy"><summary>robots.txt used by this Check</summary><pre>{{.RobotsBody}}</pre></details>{{end}}
 <h2>New Pages</h2>
 {{template "pageEvents" .New}}
 <h2>Vanished Pages</h2>
