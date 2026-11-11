@@ -70,15 +70,27 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		s.notFoundOrFail(w, r, err)
 		return
 	}
-	rows, err := s.q.ListCheckRows(r.Context(), id)
+	total, err := s.q.CountChecks(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
+	pager := paginate(r.URL, int(total))
+	rows, err := s.q.ListCheckRows(r.Context(), dbgen.ListCheckRowsParams{
+		ProjectID: id, RowLimit: int32(pager.Per), RowOffset: int32(pager.Offset()),
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	_, err = s.q.GetActiveCheck(r.Context(), id)
+	active := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.fail(w, r, err)
+		return
+	}
 	var checks []checkRow
-	active := false
 	for _, c := range rows {
-		active = active || check.Active(c.State)
 		checks = append(checks, checkRow{
 			ID: c.ID, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
 			Started: formatTime(c.StartedAt.Time, c.StartedAt.Valid), Duration: duration(c.StartedAt, c.FinishedAt),
@@ -89,7 +101,7 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, crumb{Label: "Checks"}), map[string]any{
-		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active,
+		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active, "Pager": pager,
 	})
 }
 

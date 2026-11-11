@@ -1,0 +1,5 @@
+{{define "pager"}}<nav class="pager">
+{{if .Multi}}<span class="pages">{{if .PrevHref}}<a class="prev" href="{{.PrevHref}}">‹ Prev</a>{{else}}<span class="prev muted">‹ Prev</span>{{end}} · <span class="page-of">Page {{.Page}} of {{.Last}}</span> · {{if .NextHref}}<a class="next" href="{{.NextHref}}">Next ›</a>{{else}}<span class="next muted">Next ›</span>{{end}}</span>{{end}}
+<span class="rows muted">{{.Rows}}</span>
+<span class="per">Rows per page: {{range .Sizes}}{{if .Current}}<b>{{.Per}}</b>{{else}}<a href="{{.Href}}">{{.Per}}</a>{{end}} {{end}}</span>
+</nav>{{end}}

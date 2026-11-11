@@ -66,7 +66,10 @@ func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
 // renderPool writes the Page pool tab; flash, if not nil, is shown above the
 // Add Page form.
 func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Project, flash map[string]any) {
-	pages, err := s.q.ListPagePoolRows(r.Context(), p.ID)
+	// The whole pool is classified in Go (exclusion is never stored) for the
+	// filter counts and the filtered total; only the Pages on the current page
+	// load the costly columns.
+	states, err := s.q.ListPagePoolStates(r.Context(), p.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -80,8 +83,9 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 		filter = ""
 	}
 	counts := map[string]int{}
-	rows := make([]poolRow, 0, len(pages))
-	for _, pg := range pages {
+	labels := map[int64]string{}
+	var ids []int64
+	for _, pg := range states {
 		key, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: p.ExcludePatterns})
 		counts[""]++
 		counts[key]++
@@ -91,8 +95,19 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 		if filter != "" && key != filter && !(filter == page.StateActive && key == "orphaned") {
 			continue
 		}
+		ids = append(ids, pg.ID)
+		labels[pg.ID] = label
+	}
+	pager := paginate(r.URL, len(ids))
+	pages, err := s.q.ListPagePoolRows(r.Context(), ids[pager.Offset():pager.End(len(ids))])
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	rows := make([]poolRow, 0, len(pages))
+	for _, pg := range pages {
 		row := poolRow{
-			ID: pg.ID, URL: pg.Url, State: label, LastStatus: pg.LastStatus,
+			ID: pg.ID, URL: pg.Url, State: labels[pg.ID], LastStatus: pg.LastStatus,
 			Snapshots: pg.Snapshots, FirstCheck: pg.FirstCheckID, LastChangedID: pg.LastChangedSnapshotID,
 		}
 		if pg.LastChangedSnapshotID != 0 {
@@ -101,15 +116,15 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 		rows = append(rows, row)
 	}
 	type filterView struct {
-		Key, Label string
-		Count      int
-		Current    bool
+		Label, Href string
+		Count       int
+		Current     bool
 	}
 	var filters []filterView
 	for _, f := range poolFilters {
-		filters = append(filters, filterView{f.Key, f.Label, counts[f.Key], f.Key == filter})
+		filters = append(filters, filterView{f.Label, pager.With("state", f.Key), counts[f.Key], f.Key == filter})
 	}
-	data := map[string]any{"Project": p, "Tab": "pages", "Pages": rows, "Filters": filters, "Flash": flash}
+	data := map[string]any{"Project": p, "Tab": "pages", "Pages": rows, "Filters": filters, "Flash": flash, "Pager": pager}
 	s.render(w, r, "pages", p.Domain, projectCrumbs(p, crumb{Label: "Page pool"}), data)
 }
 
@@ -218,7 +233,15 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 		s.notFoundOrFail(w, r, err)
 		return
 	}
-	hist, err := s.q.ListPageHistory(ctx, id)
+	total, err := s.q.CountPageHistory(ctx, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	pager := paginate(r.URL, int(total))
+	hist, err := s.q.ListPageHistory(ctx, dbgen.ListPageHistoryParams{
+		PageID: id, RowLimit: int32(pager.Per), RowOffset: int32(pager.Offset()),
+	})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -280,7 +303,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 	crumbs := projectCrumbs(dbgen.Project{ID: pg.ProjectID, Domain: pg.Domain},
 		crumb{Label: "Page pool", Href: fmt.Sprintf("/p/%d/pages", pg.ProjectID)}, crumb{Label: pg.Url})
 	s.render(w, r, "pageHistory", "Page history", crumbs, map[string]any{
-		"Page": pg, "State": label, "FirstCheck": first, "History": rows,
+		"Page": pg, "State": label, "FirstCheck": first, "History": rows, "Pager": pager,
 		"CanIgnore":  pg.Origin != page.OriginSeed && pg.State != page.StateIgnored,
 		"CanRestore": pg.State == page.StateIgnored,
 	})

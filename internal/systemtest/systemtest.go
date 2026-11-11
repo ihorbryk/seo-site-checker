@@ -185,6 +185,36 @@ func (s *System) Page(w *httptest.ResponseRecorder) *goquery.Document {
 	return d
 }
 
+// PagedRows walks a paginated screen from path by its pager's Next link and
+// returns, in order, the first link text of every data row of table across
+// all pages, plus the number of pages. It fails the test if a page holds more
+// than per rows or the pager never ends.
+func (s *System) PagedRows(path, table string, per int) (rows []string, pages int) {
+	s.T.Helper()
+	for path != "" {
+		w := s.Get(path)
+		if w.Code != http.StatusOK {
+			s.T.Fatalf("GET %s: status %d", path, w.Code)
+		}
+		d := s.Page(w)
+		var got []string
+		d.Find(table + " tr").Each(func(i int, tr *goquery.Selection) {
+			if i > 0 {
+				got = append(got, strings.TrimSpace(tr.Find("td").First().Find("a").First().Text()))
+			}
+		})
+		if len(got) > per {
+			s.T.Fatalf("GET %s: %d rows, want at most %d", path, len(got), per)
+		}
+		rows = append(rows, got...)
+		if pages++; pages > 100 {
+			s.T.Fatal("pager never ends")
+		}
+		path, _ = d.Find(".pager a.next").First().Attr("href")
+	}
+	return rows, pages
+}
+
 // Tick runs the scheduler once at the explicit now and returns the ids of the
 // Checks it started (queued; the worker picks them up).
 func (s *System) Tick(now time.Time) []int64 {

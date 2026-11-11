@@ -58,6 +58,17 @@ func (q *Queries) ClaimNextFetch(ctx context.Context, arg ClaimNextFetchParams) 
 	return id, err
 }
 
+const countChecks = `-- name: CountChecks :one
+SELECT count(*)::bigint FROM checks WHERE project_id = $1
+`
+
+func (q *Queries) CountChecks(ctx context.Context, projectID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countChecks, projectID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countDroppedURLs = `-- name: CountDroppedURLs :one
 SELECT count(*)::bigint FROM dropped_urls WHERE check_id = $1
 `
@@ -514,8 +525,16 @@ SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.fin
      WHERE s.check_id = c.id AND d.tier = 'seo' AND g.state <> 'ignored')::bigint AS seo,
     EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
             WHERE f.check_id = c.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS seed_failed
-FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC
+FROM checks c WHERE c.project_id = $1
+ORDER BY c.created_at DESC, c.id DESC
+LIMIT $3 OFFSET $2
 `
+
+type ListCheckRowsParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
 
 type ListCheckRowsRow struct {
 	ID                    int64
@@ -548,10 +567,10 @@ type ListCheckRowsRow struct {
 	SeedFailed            bool
 }
 
-// The Checks tab: every Check newest first with its progress and, once it has
-// ended, the Report counts. Changed counts leave out Pages now ignored.
-func (q *Queries) ListCheckRows(ctx context.Context, projectID int64) ([]ListCheckRowsRow, error) {
-	rows, err := q.db.Query(ctx, listCheckRows, projectID)
+// One page of the Checks tab: Checks newest first with their progress and,
+// once ended, the Report counts. Changed counts leave out Pages now ignored.
+func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([]ListCheckRowsRow, error) {
+	rows, err := q.db.Query(ctx, listCheckRows, arg.ProjectID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

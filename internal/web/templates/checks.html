@@ -2,6 +2,7 @@
 {{template "tabs" .}}
 <form hx-post="/p/{{.Project.ID}}/checks" action="/p/{{.Project.ID}}/checks" method="post" style="margin:12px 0">
 <button class="btn primary">{{if .HasActive}}Show running Check{{else}}Run Check{{end}}</button></form>
+{{template "pager" .Pager}}
 <table id="checks">
 <tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th><th>Changed</th><th>New</th><th>Vanished</th><th>Retired</th></tr>
 {{range .Checks}}<tr>
@@ -14,6 +15,7 @@
 </tr>{{end}}
 </table>
 {{if not .Checks}}<p class="muted">No Checks yet.</p>{{end}}
+{{template "pager" .Pager}}
 {{end}}
 
 {{define "progress"}}
@@ -90,13 +92,15 @@
 
 {{define "pages"}}
 {{template "tabs" .}}
-<nav class="filters">{{range .Filters}}{{if .Current}}<b>{{.Label}} ({{.Count}})</b>{{else}}<a href="/p/{{$.Project.ID}}/pages{{if .Key}}?state={{.Key}}{{end}}">{{.Label}} ({{.Count}})</a>{{end}} {{end}}</nav>
+<nav class="filters">{{range .Filters}}{{if .Current}}<b>{{.Label}} ({{.Count}})</b>{{else}}<a href="{{.Href}}">{{.Label}} ({{.Count}})</a>{{end}} {{end}}</nav>
+{{template "pager" .Pager}}
 <table id="pages">
 <tr><th>Page</th><th>State</th><th>Last status</th><th>Last changed</th><th>Snapshots</th><th>First seen</th></tr>
 {{range .Pages}}<tr><td class="mono"><a href="/pg/{{.ID}}">{{.URL}}</a></td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td>
 <td>{{if .LastChangedID}}<a href="/d/{{.LastChangedID}}">{{.LastChanged}}</a>{{else}}—{{end}}</td>
 <td>{{.Snapshots}}</td><td>{{if .FirstCheck}}<a href="/c/{{.FirstCheck}}">#{{.FirstCheck}}</a>{{else}}—{{end}}</td></tr>{{end}}
 </table>
+{{template "pager" .Pager}}
 <form id="add-page" hx-post="/p/{{.Project.ID}}/pages" hx-target="#add-page-msg" action="/p/{{.Project.ID}}/pages" method="post" style="margin-top:16px;display:flex;gap:6px;align-items:center">
 <input type="text" name="url" placeholder="https://{{.Project.Domain}}/path" style="max-width:420px"><button class="btn primary">Add Page</button><span id="add-page-msg"></span></form>
 {{end}}
@@ -108,6 +112,7 @@
 {{if .CanIgnore}}<form id="ignore-form" hx-post="/pg/{{.Page.ID}}/ignore" hx-target="#page-msg" action="/pg/{{.Page.ID}}/ignore" method="post"><button id="ignore" class="btn danger">Ignore</button> <span id="page-msg"></span></form>{{end}}
 {{if .CanRestore}}<form id="restore-form" hx-post="/pg/{{.Page.ID}}/restore" action="/pg/{{.Page.ID}}/restore" method="post"><button id="restore" class="btn primary">Restore</button></form>{{end}}
 </div>
+{{template "pager" .Pager}}
 <table id="history">
 <tr><th>Check</th><th>Result</th><th>Change</th><th>Snapshot</th></tr>
 {{range .History}}<tr>
@@ -119,4 +124,5 @@
 </tr>{{end}}
 </table>
 {{if not .History}}<p class="muted">Not fetched yet.</p>{{end}}
+{{template "pager" .Pager}}
 {{end}}

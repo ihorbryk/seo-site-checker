@@ -1,5 +1,11 @@
+-- name: ListPagePoolStates :many
+-- What the Page pool tab needs to classify, count and filter every Page
+-- (web.poolState); the costly columns come from ListPagePoolRows for one page.
+SELECT id, url, state, origin, orphan_streak FROM pages
+WHERE project_id = $1 ORDER BY url;
+
 -- name: ListPagePoolRows :many
--- The Page pool with what its tab shows. last_status is 0 for a Page with no
+-- The Page pool tab's columns for the given Pages, by URL. last_status is 0 for a Page with no
 -- Snapshot yet; last_changed_snapshot_id is 0 when no Snapshot of the Page has
 -- a non-empty Diff; first_check_id is 0 for a Page never fetched yet.
 SELECT pg.id, pg.url, pg.state, pg.origin, pg.orphan_streak,
@@ -18,7 +24,7 @@ LEFT JOIN LATERAL (
     WHERE s.page_id = pg.id AND d.tier <> 'empty'
     ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
 ) changed ON true
-WHERE pg.project_id = $1 ORDER BY pg.url;
+WHERE pg.id = ANY(sqlc.arg(ids)::bigint[]) ORDER BY pg.url;
 
 -- name: AddManualPage :one
 -- Adds the Page by hand. An existing discovered or retired Page becomes a
@@ -46,8 +52,12 @@ UPDATE pages SET state = 'ignored' WHERE id = $1 AND origin <> 'seed' AND state 
 -- name: RestorePage :execrows
 UPDATE pages SET state = 'active', orphan_streak = 0 WHERE id = $1 AND state = 'ignored';
 
+-- name: CountPageHistory :one
+SELECT count(*)::bigint FROM fetches WHERE page_id = $1 AND state = 'done';
+
 -- name: ListPageHistory :many
--- One row per Check that has a Fetch of the Page, newest first.
+-- One page of the Page's history: one row per Check that has a Fetch of the
+-- Page, newest first.
 SELECT f.check_id, c.started_at AS check_started_at,
     f.outcome, f.skip_reason, f.failure_kind, f.message, f.duration_ms,
     s.id AS snapshot_id, s.status, b.size AS body_size,
@@ -59,8 +69,9 @@ JOIN checks c ON c.id = f.check_id
 LEFT JOIN snapshots s ON s.id = f.id
 LEFT JOIN diffs d ON d.snapshot_id = s.id
 LEFT JOIN bodies b ON b.project_id = (SELECT project_id FROM pages WHERE id = f.page_id) AND b.sha256 = s.body_sha256
-WHERE f.page_id = $1 AND f.state = 'done'
-ORDER BY f.check_id DESC;
+WHERE f.page_id = sqlc.arg(page_id) AND f.state = 'done'
+ORDER BY f.check_id DESC
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: ListProjectSummaries :many
 -- Projects with their active Page count, newest Check (any state) and the

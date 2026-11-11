@@ -47,6 +47,17 @@ func (q *Queries) AddManualPage(ctx context.Context, arg AddManualPageParams) (P
 	return i, err
 }
 
+const countPageHistory = `-- name: CountPageHistory :one
+SELECT count(*)::bigint FROM fetches WHERE page_id = $1 AND state = 'done'
+`
+
+func (q *Queries) CountPageHistory(ctx context.Context, pageID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countPageHistory, pageID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getPage = `-- name: GetPage :one
 SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pg.reactivated_check_id, pr.domain, pr.exclude_patterns,
     COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
@@ -114,7 +125,14 @@ LEFT JOIN diffs d ON d.snapshot_id = s.id
 LEFT JOIN bodies b ON b.project_id = (SELECT project_id FROM pages WHERE id = f.page_id) AND b.sha256 = s.body_sha256
 WHERE f.page_id = $1 AND f.state = 'done'
 ORDER BY f.check_id DESC
+LIMIT $3 OFFSET $2
 `
+
+type ListPageHistoryParams struct {
+	PageID    int64
+	RowOffset int32
+	RowLimit  int32
+}
 
 type ListPageHistoryRow struct {
 	CheckID        int64
@@ -135,9 +153,10 @@ type ListPageHistoryRow struct {
 	Events         []string
 }
 
-// One row per Check that has a Fetch of the Page, newest first.
-func (q *Queries) ListPageHistory(ctx context.Context, pageID int64) ([]ListPageHistoryRow, error) {
-	rows, err := q.db.Query(ctx, listPageHistory, pageID)
+// One page of the Page's history: one row per Check that has a Fetch of the
+// Page, newest first.
+func (q *Queries) ListPageHistory(ctx context.Context, arg ListPageHistoryParams) ([]ListPageHistoryRow, error) {
+	rows, err := q.db.Query(ctx, listPageHistory, arg.PageID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +209,7 @@ LEFT JOIN LATERAL (
     WHERE s.page_id = pg.id AND d.tier <> 'empty'
     ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
 ) changed ON true
-WHERE pg.project_id = $1 ORDER BY pg.url
+WHERE pg.id = ANY($1::bigint[]) ORDER BY pg.url
 `
 
 type ListPagePoolRowsRow struct {
@@ -206,11 +225,11 @@ type ListPagePoolRowsRow struct {
 	FirstCheckID          int64
 }
 
-// The Page pool with what its tab shows. last_status is 0 for a Page with no
+// The Page pool tab's columns for the given Pages, by URL. last_status is 0 for a Page with no
 // Snapshot yet; last_changed_snapshot_id is 0 when no Snapshot of the Page has
 // a non-empty Diff; first_check_id is 0 for a Page never fetched yet.
-func (q *Queries) ListPagePoolRows(ctx context.Context, projectID int64) ([]ListPagePoolRowsRow, error) {
-	rows, err := q.db.Query(ctx, listPagePoolRows, projectID)
+func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPagePoolRowsRow, error) {
+	rows, err := q.db.Query(ctx, listPagePoolRows, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +248,47 @@ func (q *Queries) ListPagePoolRows(ctx context.Context, projectID int64) ([]List
 			&i.LastChangedAt,
 			&i.Snapshots,
 			&i.FirstCheckID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolStates = `-- name: ListPagePoolStates :many
+SELECT id, url, state, origin, orphan_streak FROM pages
+WHERE project_id = $1 ORDER BY url
+`
+
+type ListPagePoolStatesRow struct {
+	ID           int64
+	Url          string
+	State        string
+	Origin       string
+	OrphanStreak int32
+}
+
+// What the Page pool tab needs to classify, count and filter every Page
+// (web.poolState); the costly columns come from ListPagePoolRows for one page.
+func (q *Queries) ListPagePoolStates(ctx context.Context, projectID int64) ([]ListPagePoolStatesRow, error) {
+	rows, err := q.db.Query(ctx, listPagePoolStates, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPagePoolStatesRow
+	for rows.Next() {
+		var i ListPagePoolStatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.State,
+			&i.Origin,
+			&i.OrphanStreak,
 		); err != nil {
 			return nil, err
 		}
