@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 )
 
 var counter atomic.Int64
@@ -60,7 +61,7 @@ func Page(t testing.TB, db dbgen.DBTX, project dbgen.Project, path string, opts 
 	params := dbgen.CreatePageParams{
 		ProjectID: project.ID,
 		Url:       "https://" + project.Domain + path,
-		Origin:    "discovered",
+		Origin:    page.OriginDiscovered,
 	}
 	for _, o := range opts {
 		o(&params)

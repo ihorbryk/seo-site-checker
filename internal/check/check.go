@@ -19,7 +19,7 @@ import (
 
 // Triggers and states as stored.
 const (
-	TriggerManual    = "manual"
+	TriggerManual    = "manual" // pageliterals:ok Check trigger, not a Page origin
 	TriggerScheduled = "scheduled"
 
 	StateQueued     = "queued"

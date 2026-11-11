@@ -14,7 +14,7 @@ import (
 )
 
 // Schedules is the schedule enum, in the order the form lists it.
-var Schedules = []string{"manual", "hourly", "daily", "weekly"}
+var Schedules = []string{"manual", "hourly", "daily", "weekly"} // pageliterals:ok schedule values, not a Page origin
 
 // UserAgentSuggestions are offered next to the user agent field.
 var UserAgentSuggestions = []string{

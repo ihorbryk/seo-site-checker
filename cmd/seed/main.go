@@ -20,7 +20,7 @@ func main() {
 		fmt.Println("seed: DEMO_DOMAIN is not set, nothing to do. Set it (for example in mise.local.toml: [env] DEMO_DOMAIN = \"example.com\") to get a demo Project.")
 		return
 	}
-	app.Run("seed", func(ctx context.Context, _ config.Config, _ *slog.Logger, pool *pgxpool.Pool) error {
+	app.Run("seed", func(ctx context.Context, _ config.Config, _ *slog.Logger, pool *pgxpool.Pool) error { // pageliterals:ok command name, not a Page origin
 		created, err := project.EnsureDemo(ctx, pool, domain)
 		if err != nil {
 			return err
