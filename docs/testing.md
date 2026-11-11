@@ -51,7 +51,7 @@ Conventions:
 - Request settings are set through the Settings tab form with
   `s.SaveRequestSettings(p, form)`; `site.Requests(path)` returns the headers of
   every request the fake site received.
-- State with no UI yet (e.g. exclude patterns) is set with
+- State with no UI yet is set with
   `s.Exec("UPDATE projects SET ...")` or `testfixtures`; switch the test to the
   form when the form exists.
 - To extend the harness, add a method to `systemtest.System` (e.g. a scheduler
