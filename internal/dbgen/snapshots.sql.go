@@ -48,6 +48,18 @@ func (q *Queries) GetBodyContent(ctx context.Context, arg GetBodyContentParams) 
 	return content, err
 }
 
+const getDiffBaseline = `-- name: GetDiffBaseline :one
+SELECT baseline_id FROM diffs WHERE snapshot_id = $1
+`
+
+// The Snapshot a Snapshot was compared with; no row for a Page's first Snapshot.
+func (q *Queries) GetDiffBaseline(ctx context.Context, snapshotID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, getDiffBaseline, snapshotID)
+	var baseline_id int64
+	err := row.Scan(&baseline_id)
+	return baseline_id, err
+}
+
 const getSnapshotView = `-- name: GetSnapshotView :one
 SELECT s.id, s.page_id, s.check_id, s.fetched_at, s.status, s.headers, s.seo_fields,
     p.url, p.project_id, pr.domain,

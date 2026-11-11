@@ -4,6 +4,7 @@ go 1.27.2
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/pressly/goose/v3 v3.30.0
 	github.com/riverqueue/river v0.51.2

@@ -133,6 +133,16 @@ func (s *System) Get(path string) *httptest.ResponseRecorder {
 	return s.do("GET", path, nil)
 }
 
+// GetHTMX requests path the way an htmx hx-get does (fragment, no shell).
+func (s *System) GetHTMX(path string) *httptest.ResponseRecorder {
+	s.T.Helper()
+	r := httptest.NewRequest("GET", path, nil)
+	r.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	s.Web.ServeHTTP(w, r)
+	return w
+}
+
 // Post submits a form to the web app the way htmx does.
 func (s *System) Post(path string, form url.Values) *httptest.ResponseRecorder {
 	s.T.Helper()

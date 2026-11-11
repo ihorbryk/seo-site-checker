@@ -6,7 +6,7 @@
 · <a class="mono" href="{{.Snap.Url}}">{{.Snap.Url}}</a>
 </p>
 <p>
-{{if .Prev}}<a id="prev-snapshot" href="/s/{{.Prev}}">← Previous Snapshot</a>{{end}}
+{{if .Prev}}<a id="prev-snapshot" href="/s/{{.Prev}}">← Previous Snapshot</a> · <a id="diff-link" href="/d/{{.Snap.ID}}">Diff vs previous</a>{{end}}
 {{if and .Prev .Next}} · {{end}}
 {{if .Next}}<a id="next-snapshot" href="/s/{{.Next}}">Next Snapshot →</a>{{end}}
 </p>
