@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	"github.com/ihorbryk/seo-site-checker/internal/links"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
+	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -30,17 +33,29 @@ func (w *laneWorker) Timeout(job *river.Job[check.LaneArgs]) time.Duration {
 // Work performs the Fetch claimed under this job's id and then, in one
 // transaction, stores the result, claims the next Fetch, re-enqueues the lane
 // and completes this job. Transport errors are Fetch failures, never job
-// errors. A retried lane finds its Fetch still claimed and runs it again from
-// scratch; on the last attempt a failing store records an `internal` failure
-// so the Check still finishes.
+// errors. Only our own errors (database errors, panics, the worker stopping)
+// are job errors. A retried lane finds its Fetch still claimed and runs it
+// again from scratch; on the last attempt the Fetch is recorded as an
+// `internal` failure and the lane carries on, so the Check still finishes.
 func (w *laneWorker) Work(ctx context.Context, job *river.Job[check.LaneArgs]) error {
 	claimed, err := w.q.GetClaimedFetch(ctx, pgtype.Int8{Int64: job.ID, Valid: true})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return w.advance(ctx, job, nil, fetchResult{})
 	}
 	if err != nil {
-		return err
+		return w.lastAttempt(ctx, job, nil, err)
 	}
+	return w.lastAttempt(ctx, job, &claimed, w.perform(ctx, job, claimed))
+}
+
+// perform runs the claimed Fetch and stores its result. A panic is returned as
+// an error.
+func (w *laneWorker) perform(ctx context.Context, job *river.Job[check.LaneArgs], claimed dbgen.GetClaimedFetchRow) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
+		}
+	}()
 	chk, err := w.q.GetCheck(ctx, claimed.CheckID)
 	if err != nil {
 		return err
@@ -53,13 +68,22 @@ func (w *laneWorker) Work(ctx context.Context, job *river.Job[check.LaneArgs]) e
 	if err != nil {
 		return err // the worker is stopping: let River retry the lane
 	}
-	err = w.advance(ctx, job, &claimed, res)
-	if err != nil && job.Attempt >= job.MaxAttempts {
-		w.log.Error("lane failed on its last attempt; recording an internal failure", "job", job.ID, "err", err)
-		failed := fetchResult{FailKind: FailInternal, FailMsg: err.Error(), Duration: res.Duration}
-		return w.advance(ctx, job, &claimed, failed)
+	return w.advance(ctx, job, &claimed, res)
+}
+
+// lastAttempt returns err so River retries the lane, except on the last
+// attempt, where retrying is over: the claimed Fetch (if any) is recorded as
+// an `internal` failure and the lane advances anyway.
+func (w *laneWorker) lastAttempt(ctx context.Context, job *river.Job[check.LaneArgs], claimed *dbgen.GetClaimedFetchRow, err error) error {
+	if err == nil || job.Attempt < job.MaxAttempts {
+		return err
 	}
-	return err
+	w.log.Error("lane failed on its last attempt; recording an internal failure", "job", job.ID, "err", err)
+	// The job's context may be what ended (timeout, shutdown); this must still land.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	failed := fetchResult{FailKind: FailInternal, FailMsg: err.Error()}
+	return w.advance(ctx, job, claimed, failed)
 }
 
 // advance is the lane's single transaction. claimed is nil when the lane has
@@ -85,6 +109,7 @@ func (w *laneWorker) advance(ctx context.Context, job *river.Job[check.LaneArgs]
 
 	rc := river.ClientFromContext[pgx.Tx](ctx)
 	continued := false
+	lanes := chk.Lanes
 	if chk.State == check.StateRunning {
 		next, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
 			JobID: pgtype.Int8{Int64: job.ID, Valid: true}, CheckID: chk.ID,
@@ -107,14 +132,20 @@ func (w *laneWorker) advance(ctx context.Context, job *river.Job[check.LaneArgs]
 		}
 	}
 	if !continued {
-		lanes := chk.Lanes - 1
+		lanes--
+	} else if raised, err := raiseLanes(ctx, rc, tx, q, chk, job.Args); err != nil {
+		return err
+	} else {
+		lanes += raised
+	}
+	if lanes != chk.Lanes {
 		if err := q.SetCheckLanes(ctx, dbgen.SetCheckLanesParams{ID: chk.ID, Lanes: lanes}); err != nil {
 			return err
 		}
-		if lanes == 0 {
-			if _, err := rc.InsertTx(ctx, tx, check.FinalizeCheckArgs{CheckID: chk.ID}, nil); err != nil {
-				return err
-			}
+	}
+	if !continued && lanes == 0 {
+		if _, err := rc.InsertTx(ctx, tx, check.FinalizeCheckArgs{CheckID: chk.ID}, nil); err != nil {
+			return err
 		}
 	}
 
@@ -122,6 +153,36 @@ func (w *laneWorker) advance(ctx context.Context, job *river.Job[check.LaneArgs]
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// raiseLanes starts extra lanes, each with a Fetch already claimed, while
+// Fetches are pending and the Check runs fewer than max_parallel lanes (for
+// example after discovery added Fetches). It runs under the Check row lock and
+// returns how many lanes it started.
+func raiseLanes(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbgen.Queries, chk dbgen.Check, args check.LaneArgs) (int32, error) {
+	settings, err := check.ParseSettings(chk.Settings)
+	if err != nil {
+		return 0, err
+	}
+	pending, err := q.CountPendingFetches(ctx, chk.ID)
+	if err != nil {
+		return 0, err
+	}
+	extra := min(int64(settings.MaxParallel)-int64(chk.Lanes), pending)
+	var started int32
+	for ; extra > 0; extra-- {
+		lane, err := rc.InsertTx(ctx, tx, args, nil)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
+			JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}, CheckID: chk.ID,
+		}); err != nil {
+			return 0, err
+		}
+		started++
+	}
+	return started, nil
 }
 
 func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, res fetchResult) error {
@@ -174,7 +235,64 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 			return err
 		}
 	}
-	return q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: f.ID, DurationMs: dur})
+	if err := q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: f.ID, DurationMs: dur}); err != nil {
+		return err
+	}
+	if res.HasBody && res.Status >= 200 && res.Status < 300 {
+		return discover(ctx, q, chk, f, res.Body)
+	}
+	return nil
+}
+
+// discover stores the outgoing links of a 2xx HTML Snapshot, turns new URLs
+// into discovered Pages with pending Fetches, and records dropped URLs.
+func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, body []byte) error {
+	found, err := links.Extract(body, f.Url, urlnorm.Host(f.Url))
+	if err != nil {
+		return err
+	}
+	if len(found.Links) > 0 {
+		urls := make([]string, 0, len(found.Links))
+		for _, l := range found.Links {
+			urls = append(urls, l.URL)
+		}
+		if _, err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
+			return err
+		}
+		pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})
+		if err != nil {
+			return err
+		}
+		idOf := make(map[string]int64, len(pages))
+		ids := make([]int64, 0, len(pages))
+		for _, p := range pages {
+			idOf[p.Url] = p.ID
+			ids = append(ids, p.ID)
+		}
+		if _, err := q.PlanDiscoveredFetches(ctx, dbgen.PlanDiscoveredFetchesParams{CheckID: chk.ID, PageIds: ids}); err != nil {
+			return err
+		}
+		bySource := map[string][]int64{}
+		for _, l := range found.Links {
+			bySource[l.Source] = append(bySource[l.Source], idOf[l.URL])
+		}
+		for source, pageIDs := range bySource {
+			err := q.InsertLinks(ctx, dbgen.InsertLinksParams{SnapshotID: f.ID, Source: source, PageIds: pageIDs})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	byReason := map[string][]string{}
+	for _, d := range found.Dropped {
+		byReason[d.Reason] = append(byReason[d.Reason], d.URL)
+	}
+	for reason, urls := range byReason {
+		if err := q.InsertDroppedURLs(ctx, dbgen.InsertDroppedURLsParams{CheckID: chk.ID, Reason: reason, Urls: urls}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // storeDiff writes the Diff summary of a new Snapshot against the Page's

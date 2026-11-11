@@ -112,6 +112,59 @@ SELECT c.*,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
 FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC;
 
+-- name: UpsertDiscoveredPages :many
+-- Adds the URLs as discovered Pages of the Project; returns the ones that were new.
+INSERT INTO pages (project_id, url, origin)
+SELECT sqlc.arg(project_id), u, 'discovered' FROM unnest(sqlc.arg(urls)::text[]) AS u
+ON CONFLICT (project_id, url) DO NOTHING
+RETURNING id, url;
+
+-- name: PageIDsByURL :many
+SELECT id, url, state FROM pages
+WHERE project_id = sqlc.arg(project_id) AND url = ANY(sqlc.arg(urls)::text[]);
+
+-- name: PlanDiscoveredFetches :execrows
+-- Gives every active linked Page without a Fetch in this Check a pending one.
+INSERT INTO fetches (check_id, page_id)
+SELECT sqlc.arg(check_id), pg.id FROM pages pg
+WHERE pg.id = ANY(sqlc.arg(page_ids)::bigint[]) AND pg.state = 'active'
+ORDER BY pg.id
+ON CONFLICT (check_id, page_id) DO NOTHING;
+
+-- name: InsertLinks :exec
+INSERT INTO links (snapshot_id, target_page_id, source)
+SELECT sqlc.arg(snapshot_id), t, sqlc.arg(source)
+FROM unnest(sqlc.arg(page_ids)::bigint[]) AS t
+ON CONFLICT DO NOTHING;
+
+-- name: InsertDroppedURLs :exec
+INSERT INTO dropped_urls (check_id, url, reason)
+SELECT sqlc.arg(check_id), u, sqlc.arg(reason)
+FROM unnest(sqlc.arg(urls)::text[]) AS u
+ON CONFLICT DO NOTHING;
+
+-- name: CountPendingFetches :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending';
+
+-- name: CheckDiscovery :one
+-- Pages discovered during the Check and URLs it dropped.
+SELECT
+    (SELECT count(*) FROM pages pg
+     WHERE pg.project_id = c.project_id AND pg.origin = 'discovered'
+       AND c.started_at IS NOT NULL AND pg.created_at >= c.started_at)::bigint AS new_pages,
+    (SELECT count(*) FROM dropped_urls d WHERE d.check_id = c.id)::bigint AS dropped
+FROM checks c WHERE c.id = $1;
+
+-- name: ListPagePool :many
+-- last_status is 0 for a Page with no Snapshot yet.
+SELECT pg.id, pg.url, pg.state, pg.origin, COALESCE(last.status, 0)::int AS last_status
+FROM pages pg
+LEFT JOIN LATERAL (
+    SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
+    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
+) last ON true
+WHERE pg.project_id = $1 ORDER BY pg.url;
+
 -- name: ListDueProjects :many
 -- Projects whose schedule is due at now: not manual, no active Check, and no
 -- scheduled Check yet or the last one's creation time + interval <= now.

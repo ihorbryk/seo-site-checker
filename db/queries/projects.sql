@@ -23,3 +23,13 @@ RETURNING *;
 
 -- name: ListPagesByProject :many
 SELECT * FROM pages WHERE project_id = $1 ORDER BY url;
+
+-- name: UpdateProjectRequestSettings :exec
+UPDATE projects SET
+    schedule = sqlc.arg(schedule),
+    user_agent = sqlc.arg(user_agent),
+    custom_headers = sqlc.arg(custom_headers),
+    timeout_s = sqlc.arg(timeout_s),
+    max_parallel = sqlc.arg(max_parallel),
+    respect_robots = sqlc.arg(respect_robots)
+WHERE id = sqlc.arg(id);

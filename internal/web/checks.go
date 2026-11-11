@@ -84,8 +84,26 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
-		"Project": p, "Checks": checks, "HasActive": active,
+		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active,
 	})
+}
+
+func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.idParam(w, r)
+	if !ok {
+		return
+	}
+	p, err := s.q.GetProject(r.Context(), id)
+	if err != nil {
+		s.notFoundOr(w, r, err)
+		return
+	}
+	pages, err := s.q.ListPagePool(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": pages})
 }
 
 func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +161,12 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data["Failures"] = failures
+	disc, err := s.q.CheckDiscovery(r.Context(), c.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	data["NewPages"], data["Dropped"] = disc.NewPages, disc.Dropped
 	changed, err := s.changedPages(r, c.ID)
 	if err != nil {
 		s.fail(w, r, err)

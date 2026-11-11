@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +45,9 @@ type Site struct {
 	pages  map[string]Response
 	faults map[string]Fault
 	hits   map[string]int
+	reqs   map[string][]http.Header
+	// inFlight is the number of requests being served, maxInFlight its peak.
+	inFlight, maxInFlight int
 }
 
 // New starts a fake site answering for host (e.g. "shop.test"); it is closed
@@ -54,6 +58,7 @@ func New(t testing.TB, host string) *Site {
 		pages:  map[string]Response{},
 		faults: map[string]Fault{},
 		hits:   map[string]int{},
+		reqs:   map[string][]http.Header{},
 	}
 	s.server = httptest.NewTLSServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.server.Close)
@@ -91,6 +96,22 @@ func (s *Site) Hits(path string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.hits[path]
+}
+
+// Requests returns the headers of each request received for path, oldest
+// first (query string excluded).
+func (s *Site) Requests(path string) []http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.reqs[path])
+}
+
+// MaxConcurrent is the largest number of requests the site was serving at
+// the same time.
+func (s *Site) MaxConcurrent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxInFlight
 }
 
 // Host is the fake host the site answers for.
@@ -159,9 +180,17 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	s.mu.Lock()
 	s.hits[path]++
+	s.reqs[path] = append(s.reqs[path], r.Header.Clone())
 	resp, found := s.pages[path]
 	fault := s.faults[path]
+	s.inFlight++
+	s.maxInFlight = max(s.maxInFlight, s.inFlight)
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
 
 	if fault.Delay > 0 {
 		select {

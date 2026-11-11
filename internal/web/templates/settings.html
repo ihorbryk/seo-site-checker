@@ -1,0 +1,40 @@
+{{define "tabs"}}
+<h1>{{.Project.Domain}}</h1>
+<nav class="tabs">{{if eq .Tab "checks"}}<b>Checks</b>{{else}}<a href="/p/{{.Project.ID}}">Checks</a>{{end}}
+{{if eq .Tab "pages"}}<b>Page pool</b>{{else}}<a href="/p/{{.Project.ID}}/pages">Page pool</a>{{end}}
+{{if eq .Tab "settings"}}<b>Settings</b>{{else}}<a href="/p/{{.Project.ID}}/settings">Settings</a>{{end}}</nav>
+{{end}}
+
+{{define "headerRow"}}<div class="hdr">
+<input type="text" name="header_name" value="{{.Name}}" placeholder="Header-Name" class="hname" aria-label="Header name">
+<input type="text" name="header_value" value="{{.Value}}" placeholder="value" class="hvalue" aria-label="Header value">
+<button type="button" class="btn" hx-on:click="this.closest('.hdr').remove()" aria-label="Remove header">Remove</button>
+</div>{{end}}
+
+{{define "settingsResult"}}{{if .Errors}}<div class="flash err">{{range .Errors}}{{.}}
+{{end}}</div>{{else if .Saved}}<div class="flash">Saved. Changes apply from the next Check; a running Check keeps the settings it started with.</div>{{end}}{{end}}
+
+{{define "settings"}}
+{{template "tabs" .}}
+<p>Domain: <b id="domain" class="mono">{{.Project.Domain}}</b> <span class="muted small">fixed at creation</span></p>
+<form id="request-settings" class="settings" method="post" action="/p/{{.Project.ID}}/settings" hx-post="/p/{{.Project.ID}}/settings" hx-target="#saved-req">
+<fieldset><legend>Request settings</legend>
+<p class="muted small">Changes apply from the next Check.</p>
+<label>Schedule</label>
+<select name="schedule">{{range .Schedules}}<option value="{{.}}" {{if eq . $.S.Schedule}}selected{{end}}>{{.}}</option>{{end}}</select>
+<label>User agent</label>
+<input type="text" name="user_agent" value="{{.S.UserAgent}}" list="uas">
+<datalist id="uas">{{range .UserAgents}}<option value="{{.}}">{{end}}</datalist>
+<label>Custom headers <span class="muted small">sent in this order; use Authorization or Cookie for access. User-Agent has its own field.</span></label>
+<div id="headers">{{range .S.Headers}}{{template "headerRow" .}}{{end}}</div>
+<p><button type="button" class="btn" hx-get="/p/{{.Project.ID}}/settings/header-row" hx-target="#headers" hx-swap="beforeend">Add header</button></p>
+<label>Timeout <span class="muted small">seconds for the whole fetch, 1-120</span></label>
+<input type="number" name="timeout_s" min="1" max="120" value="{{.S.TimeoutS}}" style="width:100px">
+<label>Max parallel requests <span class="muted small">1-10</span></label>
+<input type="number" name="max_parallel" min="1" max="10" value="{{.S.MaxParallel}}" style="width:100px">
+<label><input type="checkbox" name="respect_robots" {{if .S.RespectRobots}}checked{{end}}> Respect robots.txt</label>
+<p><button class="btn primary">Save Request settings</button></p>
+<div id="saved-req">{{template "settingsResult" .}}</div>
+</fieldset>
+</form>
+{{end}}

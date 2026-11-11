@@ -1,6 +1,5 @@
 {{define "project"}}
-<h1>{{.Project.Domain}}</h1>
-<nav class="tabs"><b>Checks</b></nav>
+{{template "tabs" .}}
 <form hx-post="/p/{{.Project.ID}}/checks" action="/p/{{.Project.ID}}/checks" method="post" style="margin:12px 0">
 <button class="btn primary">{{if .HasActive}}Show running Check{{else}}Run Check{{end}}</button></form>
 <table id="checks">
@@ -40,6 +39,8 @@
 <tr><th>Fetched</th><td class="fetched">{{.Check.CountSnapshots}}</td></tr>
 <tr><th>Failed</th><td class="failed">{{.Check.CountFailures}}</td></tr>
 <tr><th>Skipped</th><td class="skipped">{{.Check.CountSkipped}}</td></tr>
+<tr><th>New Pages</th><td class="new-pages">{{.NewPages}}</td></tr>
+<tr><th>Dropped URLs</th><td class="dropped">{{.Dropped}}</td></tr>
 </table>
 <h2>Changed Pages</h2>
 <p id="counts"><b class="changed">{{.ChangedCount}}</b> changed, <b class="unchanged">{{.UnchangedCount}}</b> unchanged</p>
@@ -56,4 +57,12 @@
 {{range .Failures}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
 <td>{{if .AlsoFailedPreviously}}<span class="badge also">also failed in the previous Check</span>{{end}}</td></tr>{{end}}
 </table>{{else}}<p class="muted">None.</p>{{end}}
+{{end}}
+
+{{define "pages"}}
+{{template "tabs" .}}
+<table id="pages">
+<tr><th>Page</th><th>State</th><th>Last status</th></tr>
+{{range .Pages}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
+</table>
 {{end}}
