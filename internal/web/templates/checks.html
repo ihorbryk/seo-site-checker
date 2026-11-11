@@ -1,0 +1,122 @@
+{{define "project"}}
+{{template "tabs" .}}
+<form hx-post="/p/{{.Project.ID}}/checks" action="/p/{{.Project.ID}}/checks" method="post" style="margin:12px 0">
+<button class="btn primary">{{if .HasActive}}Show running Check{{else}}Run Check{{end}}</button></form>
+<table id="checks">
+<tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th><th>Changed</th><th>New</th><th>Vanished</th><th>Retired</th></tr>
+{{range .Checks}}<tr>
+<td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td class="c-trigger">{{.Trigger}}</td>
+<td><span class="badge">{{.State}}</span>{{if .Partial}}<span class="badge partial">partial</span>{{end}}{{if .SeedFailed}}<span class="badge seed-failed">seed failed</span>{{end}}{{if .Active}} <span class="live"></span>{{end}}
+{{if .Active}}<form hx-post="/c/{{.ID}}/cancel" action="/c/{{.ID}}/cancel" method="post" style="display:inline"><button class="btn">Cancel</button></form>{{end}}</td>
+<td>{{.Started}}</td><td>{{.Duration}}</td><td>{{.Fetched}} / {{.Known}}</td><td class="c-failed">{{.Failures}}</td>
+{{if .Active}}<td colspan="4" class="muted">running</td>{{else}}<td><b class="c-changed">{{.Changed}}</b>{{if .Critical}} <span class="badge tier tier-critical"><span class="c-critical">{{.Critical}}</span> critical</span>{{else}}<span class="c-critical" hidden>0</span>{{end}}{{if .SEO}} <span class="badge tier tier-seo"><span class="c-seo">{{.SEO}}</span> SEO</span>{{else}}<span class="c-seo" hidden>0</span>{{end}}</td>
+<td class="c-new">{{.New}}</td><td class="c-vanished">{{.Vanished}}</td><td class="c-retired">{{.Retired}}</td>{{end}}
+</tr>{{end}}
+</table>
+{{if not .Checks}}<p class="muted">No Checks yet.</p>{{end}}
+{{end}}
+
+{{define "progress"}}
+<div id="progress" hx-get="/c/{{.CheckID}}/progress" hx-trigger="every 2s" hx-swap="outerHTML">
+{{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
+<p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed, <b class="discovered">{{.Discovered}}</b> newly discovered.</p>
+{{end}}
+{{if .Cancelling}}<p class="muted">Cancelling…</p>{{else}}<form hx-post="/c/{{.CheckID}}/cancel" action="/c/{{.CheckID}}/cancel" method="post"><button class="btn">Cancel</button></form>{{end}}
+{{with .InFlight}}<ul class="lanes">{{range .}}<li class="mono">fetching {{.Url}}</li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+
+{{define "checkRunning"}}
+<h1>Check #{{.Check.ID}} <span class="live"></span></h1>
+<p class="muted">{{.Project.Domain}} · {{.Check.Trigger}} · started {{.Started}}</p>
+{{template "progress" .Progress}}
+{{end}}
+
+{{define "report"}}
+<h1>Check #{{.Check.ID}} <span class="badge">{{.Check.State}}</span></h1>
+{{if eq .Check.State "cancelled"}}<p id="partial-banner" class="banner">This Check was cancelled, so its Report is partial: Pages not fetched are counted as skipped, and vanished and retired Pages were not counted.</p>{{end}}
+<table id="report-header">
+<tr><th>Started</th><td>{{.Started}}</td></tr>
+<tr><th>Finished</th><td>{{.Finished}}</td></tr>
+<tr><th>Duration</th><td>{{.Duration}}</td></tr>
+<tr><th>Trigger</th><td>{{.Check.Trigger}}</td></tr>
+<tr><th>Fetched</th><td class="fetched">{{.Check.CountSnapshots}}</td></tr>
+<tr><th>Changed</th><td class="changed">{{.ChangedCount}}</td></tr>
+<tr><th>Unchanged</th><td class="unchanged">{{.UnchangedCount}}</td></tr>
+<tr><th>New Pages</th><td class="new-pages">{{.Check.CountNew}}</td></tr>
+<tr><th>Vanished Pages</th><td class="vanished-count">{{.Check.CountVanished}}</td></tr>
+<tr><th>Retired Pages</th><td class="retired-count">{{.Check.CountRetired}}</td></tr>
+<tr><th>Failed</th><td class="failed">{{.Check.CountFailures}}</td></tr>
+<tr><th>Skipped</th><td class="skipped"><a href="/c/{{.Check.ID}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
+<tr><th>Dropped URLs</th><td class="dropped">{{.Dropped}}</td></tr>
+</table>
+{{if .Check.OrphanCountingSkipped}}<p id="orphan-banner" class="banner">The seed Page was not fetched, so no links were seen: vanished and retired Pages were not counted in this Check.</p>{{end}}
+{{if .RobotsUnreachable}}<p id="robots-banner" class="banner">robots.txt could not be read, so every Page was skipped in this Check.</p>{{end}}
+{{if .ShowSkipped}}<h2>Skipped Pages</h2>
+{{if .Skipped}}<table id="skipped-list">
+<tr><th>Page</th><th>Reason</th></tr>
+{{range .Skipped}}<tr><td class="mono">{{.Url}}</td><td>{{.SkipReason.String}}</td></tr>{{end}}
+</table>{{else}}<p class="muted">None.</p>{{end}}
+{{end}}
+{{if .RobotsBody}}<details id="robots-copy"><summary>robots.txt used by this Check</summary><pre>{{.RobotsBody}}</pre></details>{{end}}
+<h2>Changed Pages</h2>
+{{if .Changed}}<table id="changed">
+<tr><th>Page</th><th>Tier</th><th>Changed</th><th>SEO</th></tr>
+{{range .Changed}}<tr><td class="mono"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
+<td><span class="badge tier tier-{{.Tier}}">{{.Tier}}</span></td>
+<td class="badges">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</td>
+<td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}{{if .Chain}}<div class="chain mono">{{.Chain}}</div>{{end}}</td></tr>{{end}}
+</table>{{end}}
+<h2>New Pages</h2>
+{{template "pageEvents" .New}}
+<h2>Vanished Pages</h2>
+{{template "pageEvents" .Vanished}}
+<h2>Retired Pages</h2>
+{{template "pageEvents" .Retired}}
+<h2>Fetch failures</h2>
+{{if .Failures}}<table id="failures">
+<tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
+{{range .Failures}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
+<td>{{if .AlsoFailedPreviously}}<span class="badge also">also failed in the previous Check</span>{{end}}</td></tr>{{end}}
+</table>{{else}}<p class="muted">None.</p>{{end}}
+{{end}}
+
+{{define "pageEvents"}}
+{{if .Rows}}<table id="{{.ID}}">
+<tr><th>Page</th><th></th></tr>
+{{range .Rows}}<tr><td class="mono">{{.Url}}</td><td>{{if eq .Kind "reactivated"}}<span class="badge">reactivated</span>{{end}}</td></tr>{{end}}
+</table>{{else}}<p class="muted">None.</p>{{end}}
+{{end}}
+
+{{define "pages"}}
+{{template "tabs" .}}
+<nav class="filters">{{range .Filters}}{{if .Current}}<b>{{.Label}} ({{.Count}})</b>{{else}}<a href="/p/{{$.Project.ID}}/pages{{if .Key}}?state={{.Key}}{{end}}">{{.Label}} ({{.Count}})</a>{{end}} {{end}}</nav>
+<table id="pages">
+<tr><th>Page</th><th>State</th><th>Last status</th><th>Last changed</th><th>Snapshots</th><th>First seen</th></tr>
+{{range .Pages}}<tr><td class="mono"><a href="/pg/{{.ID}}">{{.URL}}</a></td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td>
+<td>{{if .LastChangedID}}<a href="/d/{{.LastChangedID}}">{{.LastChanged}}</a>{{else}}—{{end}}</td>
+<td>{{.Snapshots}}</td><td>{{if .FirstCheck}}<a href="/c/{{.FirstCheck}}">#{{.FirstCheck}}</a>{{else}}—{{end}}</td></tr>{{end}}
+</table>
+<form id="add-page" hx-post="/p/{{.Project.ID}}/pages" hx-target="#add-page-msg" action="/p/{{.Project.ID}}/pages" method="post" style="margin-top:16px;display:flex;gap:6px;align-items:center">
+<input type="text" name="url" placeholder="https://{{.Project.Domain}}/path" style="max-width:420px"><button class="btn primary">Add Page</button><span id="add-page-msg"></span></form>
+{{end}}
+
+{{define "pageHistory"}}
+<h1>Page <span id="page-url" class="mono">{{.Page.Url}}</span></h1>
+<p class="muted"><span id="page-state" class="badge">{{.State}}</span> {{.Page.Origin}} Page{{if .FirstCheck}} · first seen in <a href="/c/{{.FirstCheck}}">Check #{{.FirstCheck}}</a>{{end}}</p>
+<div style="margin:8px 0">
+{{if .CanIgnore}}<form id="ignore-form" hx-post="/pg/{{.Page.ID}}/ignore" hx-target="#page-msg" action="/pg/{{.Page.ID}}/ignore" method="post"><button id="ignore" class="btn danger">Ignore</button> <span id="page-msg"></span></form>{{end}}
+{{if .CanRestore}}<form id="restore-form" hx-post="/pg/{{.Page.ID}}/restore" action="/pg/{{.Page.ID}}/restore" method="post"><button id="restore" class="btn primary">Restore</button></form>{{end}}
+</div>
+<table id="history">
+<tr><th>Check</th><th>Result</th><th>Change</th><th>Snapshot</th></tr>
+{{range .History}}<tr>
+<td><a href="/c/{{.CheckID}}">#{{.CheckID}}</a><div class="muted small">{{.Started}}</div></td>
+<td>{{.Result}}{{range .Events}} <span class="badge">{{.}}</span>{{end}}
+{{if .Chain}}<div class="mono small chain">{{.Chain}}</div>{{end}}</td>
+<td>{{if .Tier}}{{if ne .Tier "empty"}}<span class="badge tier tier-{{.Tier}}">{{.Tier}}</span>{{range .Badges}}<span class="badge">{{.}}</span>{{end}}{{end}}{{end}}{{if .Note}}<span class="muted">{{.Note}}</span>{{end}}</td>
+<td>{{if .SnapshotID}}<a href="/s/{{.SnapshotID}}">Snapshot</a>{{end}}{{if .DiffLink}} · <a href="/d/{{.SnapshotID}}">Diff</a>{{end}}</td>
+</tr>{{end}}
+</table>
+{{if not .History}}<p class="muted">Not fetched yet.</p>{{end}}
+{{end}}

@@ -1,0 +1,58 @@
+{
+  "canonical": [
+    "https://shop.test/widgets/blue"
+  ],
+  "content_type": [
+    "text/html; charset=utf-8"
+  ],
+  "h1": [
+    "Blue Widget",
+    "Second heading"
+  ],
+  "hreflang": [
+    "en-GB https://shop.test/widgets/blue",
+    "de https://shop.test/de/widgets/blue",
+    "x-default https://shop.test/widgets/blue"
+  ],
+  "html_lang": [
+    "en-GB"
+  ],
+  "jsonld_types": [
+    "Product",
+    "Offer",
+    "BreadcrumbList",
+    "Organization",
+    "LocalBusiness"
+  ],
+  "meta_description": [
+    "Buy the Blue Widget. Free delivery."
+  ],
+  "meta_robots": [
+    "robots: index, follow",
+    "googlebot: noindex"
+  ],
+  "og_description": [
+    "The best Widget"
+  ],
+  "og_image": [
+    "https://shop.test/img/blue.jpg",
+    "https://shop.test/img/blue-2.jpg"
+  ],
+  "og_title": [
+    "Blue Widget"
+  ],
+  "og_url": [
+    "https://shop.test/widgets/blue"
+  ],
+  "redirect_target": [],
+  "status": [
+    "200"
+  ],
+  "title": [
+    "Blue Widget | Acme Shop"
+  ],
+  "x_robots_tag": [
+    "noarchive",
+    "googlebot: nosnippet"
+  ]
+}

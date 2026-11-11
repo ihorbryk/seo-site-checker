@@ -1,0 +1,58 @@
+{{define "tabs"}}
+<h1>{{.Project.Domain}}</h1>
+<nav class="tabs">{{if eq .Tab "checks"}}<b>Checks</b>{{else}}<a href="/p/{{.Project.ID}}">Checks</a>{{end}}
+{{if eq .Tab "pages"}}<b>Page pool</b>{{else}}<a href="/p/{{.Project.ID}}/pages">Page pool</a>{{end}}
+{{if eq .Tab "settings"}}<b>Settings</b>{{else}}<a href="/p/{{.Project.ID}}/settings">Settings</a>{{end}}</nav>
+{{end}}
+
+{{define "headerRow"}}<div class="hdr">
+<input type="text" name="header_name" value="{{.Name}}" placeholder="Header-Name" class="hname" aria-label="Header name">
+<input type="text" name="header_value" value="{{.Value}}" placeholder="value" class="hvalue" aria-label="Header value">
+<button type="button" class="btn" hx-on:click="this.closest('.hdr').remove()" aria-label="Remove header">Remove</button>
+</div>{{end}}
+
+{{define "settingsResult"}}{{if .Errors}}<div class="flash err">{{range .Errors}}{{.}}
+{{end}}</div>{{else if .Saved}}<div class="flash">Saved. Changes apply from the next Check; a running Check keeps the settings it started with.</div>{{end}}{{end}}
+
+{{define "settings"}}
+{{template "tabs" .}}
+<p>Domain: <b id="domain" class="mono">{{.Project.Domain}}</b> <span class="muted small">fixed at creation</span></p>
+<form id="request-settings" class="settings" method="post" action="/p/{{.Project.ID}}/settings" hx-post="/p/{{.Project.ID}}/settings" hx-target="#saved-req">
+<fieldset><legend>Request settings</legend>
+<p class="muted small">Changes apply from the next Check.</p>
+<label>Schedule</label>
+<select name="schedule">{{range .Schedules}}<option value="{{.}}" {{if eq . $.S.Schedule}}selected{{end}}>{{.}}</option>{{end}}</select>
+<label>User agent</label>
+<input type="text" name="user_agent" value="{{.S.UserAgent}}" list="uas">
+<datalist id="uas">{{range .UserAgents}}<option value="{{.}}">{{end}}</datalist>
+<label>Custom headers <span class="muted small">sent in this order; use Authorization or Cookie for access. User-Agent has its own field.</span></label>
+<div id="headers">{{range .S.Headers}}{{template "headerRow" .}}{{end}}</div>
+<p><button type="button" class="btn" hx-get="/p/{{.Project.ID}}/settings/header-row" hx-target="#headers" hx-swap="beforeend">Add header</button></p>
+<label>Timeout <span class="muted small">seconds for the whole fetch, 1-120</span></label>
+<input type="number" name="timeout_s" min="1" max="120" value="{{.S.TimeoutS}}" style="width:100px">
+<label>Max parallel requests <span class="muted small">1-10</span></label>
+<input type="number" name="max_parallel" min="1" max="10" value="{{.S.MaxParallel}}" style="width:100px">
+<label>Exclude patterns <span class="muted small">one per line, matched against path and query. <code>*</code> stays within one segment, <code>**</code> crosses segments, everything else is literal. Matching Pages are no longer fetched; the seed Page can't be excluded.</span></label>
+<textarea name="exclude_patterns" rows="4" placeholder="/private/**">{{.S.ExcludePatterns}}</textarea>
+<label><input type="checkbox" name="respect_robots" {{if .S.RespectRobots}}checked{{end}}> Respect robots.txt</label>
+<p><button class="btn primary">Save Request settings</button></p>
+<div id="saved-req">{{template "settingsResult" .}}</div>
+</fieldset>
+</form>
+<form id="noise-rules" class="settings" method="post" action="/p/{{.Project.ID}}/settings/noise" hx-post="/p/{{.Project.ID}}/settings/noise" hx-target="#saved-noise">
+<fieldset><legend>Noise rules</legend>
+<p class="muted small">Stop known-volatile parts of a response from counting as a change. They never apply to SEO fields. Changes apply from the next Check; a running Check keeps the rules it started with.</p>
+<details id="builtin-rules"><summary>Built-in rules (always on, read-only)</summary>
+<p class="small">Headers: {{range .Builtin}}{{if eq .Kind "header"}}<code>{{.Value}}</code> {{end}}{{end}}</p>
+<p class="small">Body masks:</p><ul class="small">{{range .Builtin}}{{if eq .Kind "body_mask"}}<li><code>{{.Value}}</code></li>{{end}}{{end}}</ul>
+</details>
+<label>Headers to ignore <span class="muted small">one name per line, case-insensitive</span></label>
+<textarea name="header_names" rows="3" placeholder="X-Build-Id">{{.N.HeaderNames}}</textarea>
+<label>Body masks <span class="muted small">one RE2 regular expression per line; each match in the reformatted HTML is replaced before comparing</span></label>
+<textarea name="body_masks" rows="3" placeholder="Rendered at \d\d:\d\d">{{.N.BodyMasks}}</textarea>
+<p><button class="btn primary">Save Noise rules</button></p>
+<div id="saved-noise">{{if .NoiseErrors}}<div class="flash err">{{range .NoiseErrors}}{{.}}
+{{end}}</div>{{end}}</div>
+</fieldset>
+</form>
+{{end}}

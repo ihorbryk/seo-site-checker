@@ -1,2 +1,138 @@
+min_version = "2026.11.6"
+
+[settings]
+experimental = true
+
 [tools]
 go = "1.27.2"
+postgres = "18.6"
+"aqua:pressly/goose" = "3.29.0"
+"aqua:sqlc-dev/sqlc" = "1.31.1"
+"go:github.com/riverqueue/river/cmd/river" = "0.51.2"
+
+# Configuration is environment variables only. DATABASE_URL honours a value
+# already in the shell (CI service container, a shared Postgres for several
+# worktrees); otherwise it points at the local `postgres` daemon below.
+# Per-developer overrides (DEMO_DOMAIN, ...) go in mise.local.toml.
+[env]
+DATABASE_URL = "{{ get_env(name='DATABASE_URL', default='postgres://postgres@127.0.0.1:54329/seo_checker?sslmode=disable') }}"
+WEB_ADDR = "127.0.0.1:8089"
+LOG_LEVEL = "info"
+WORKER_CONCURRENCY = "20"
+
+[daemons.postgres]
+preset = "postgres"
+version = "18"
+port = 54329
+data_dir = ".data/postgres"
+options.database = "seo_checker"
+
+[daemons.web]
+run = "exec go run ./cmd/web"
+ready_port = 8089
+depends = ["postgres"]
+watch = ["**/*.go", "**/*.sql", "**/*.html", "go.mod"]
+
+[daemons.scheduler]
+run = "exec go run ./cmd/scheduler"
+depends = ["postgres"]
+watch = ["**/*.go", "**/*.sql", "**/*.html", "go.mod"]
+
+[daemons.worker]
+run = "exec go run ./cmd/worker"
+depends = ["postgres"]
+watch = ["**/*.go", "**/*.sql", "**/*.html", "go.mod"]
+
+[daemon_groups]
+default = ["postgres", "web", "scheduler", "worker"]
+
+# Tasks that only need a reachable DATABASE_URL have no `daemons` key, so they
+# also run in CI (service container) and against a shared Postgres. The
+# `:local` variants start the project's own postgres daemon first.
+
+[tasks.dev]
+description = "Start postgres, migrate, seed, then web, scheduler and worker"
+depends = ["migrate:local", "seed:local"]
+run = "mise daemons start"
+
+[tasks.stop]
+description = "Stop every daemon"
+run = "mise daemons stop"
+
+[tasks.migrate]
+description = "Apply goose migrations to DATABASE_URL"
+run = 'goose -dir db/migrations postgres "$DATABASE_URL" up'
+
+[tasks."migrate:local"]
+description = "Start the postgres daemon, then migrate"
+daemons = ["postgres"]
+run = "mise run migrate"
+
+[tasks."migrate:new"]
+description = "Create a goose migration: mise run migrate:new <name>"
+usage = 'arg "<name>"'
+run = 'goose -dir db/migrations create "$usage_name" sql'
+
+[tasks.seed]
+description = "Create the demo Project from DEMO_DOMAIN (no-op with a hint when unset)"
+run = "go run ./cmd/seed"
+
+[tasks."seed:local"]
+description = "Start the postgres daemon, then seed"
+daemons = ["postgres"]
+run = "mise run seed"
+
+[tasks.gen]
+description = "Regenerate sqlc code"
+run = "sqlc generate"
+
+[tasks."river:migration"]
+description = "Print River's SQL as a goose file body: river:migration up|down [version]"
+usage = '''
+arg "<direction>" help="up or down"
+arg "[version]" help="a single River migration version; default all except 001"
+'''
+run = '''
+if [ -n "$usage_version" ]; then
+  river migrate-get --version "$usage_version" --"$usage_direction"
+else
+  river migrate-get --all --exclude-version 1 --"$usage_direction"
+fi
+'''
+
+[tasks."db:reset"]
+description = "Wipe the local postgres daemon's data and start it empty"
+run = '''
+mise daemons stop postgres || true
+rm -rf .data/postgres
+mise daemons start postgres
+'''
+
+[tasks.psql]
+description = "psql into DATABASE_URL"
+run = 'psql "$DATABASE_URL"'
+
+[tasks."psql:local"]
+description = "Start the postgres daemon, then psql"
+daemons = ["postgres"]
+run = 'psql "$DATABASE_URL"'
+
+[tasks.lint]
+description = "gofmt, go vet, sqlc freshness, go mod tidy diff"
+run = '''
+test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
+go vet ./...
+sqlc generate
+git diff --exit-code -- internal/dbgen
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+'''
+
+[tasks.test]
+description = "go test -race ./... against DATABASE_URL (CI, or a shared Postgres)"
+run = "go test -race ./..."
+
+[tasks."test:local"]
+description = "Start the postgres daemon, then run the tests"
+daemons = ["postgres"]
+run = "go test -race ./..."
