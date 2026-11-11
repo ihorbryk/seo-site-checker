@@ -56,8 +56,8 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (project_id, sha256) DO NOTHING;
 
 -- name: InsertSnapshot :exec
-INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256, seo_fields)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 
 -- name: SetFetchJob :exec
 UPDATE fetches SET job_id = $2 WHERE id = $1;
@@ -164,3 +164,25 @@ LEFT JOIN LATERAL (
     ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
 ) last ON true
 WHERE pg.project_id = $1 ORDER BY pg.url;
+
+-- name: ListDueProjects :many
+-- Projects whose schedule is due at now: not manual, no active Check, and no
+-- scheduled Check yet or the last one's creation time + interval <= now.
+-- Manual Checks don't count; a cancelled scheduled Check does.
+SELECT p.id FROM projects p
+WHERE p.schedule <> 'manual'
+  AND NOT EXISTS (
+      SELECT 1 FROM checks a
+      WHERE a.project_id = p.id AND a.state IN ('queued', 'running', 'cancelling'))
+  AND COALESCE(
+      (SELECT max(c.created_at) FROM checks c WHERE c.project_id = p.id AND c.trigger = 'scheduled')
+          + CASE p.schedule
+              WHEN 'hourly' THEN interval '1 hour'
+              WHEN 'daily' THEN interval '1 day'
+              ELSE interval '7 days'
+            END,
+      '-infinity'::timestamptz) <= sqlc.arg(now)::timestamptz
+ORDER BY p.id;
+
+-- name: SetCheckCreatedAt :exec
+UPDATE checks SET created_at = $2 WHERE id = $1;

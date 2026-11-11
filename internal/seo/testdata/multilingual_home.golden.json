@@ -1,0 +1,41 @@
+{
+  "canonical": [
+    "/fr/"
+  ],
+  "content_type": [
+    "text/html; charset=utf-8"
+  ],
+  "h1": [
+    "Bienvenue"
+  ],
+  "hreflang": [
+    "fr /fr/",
+    "en /en/"
+  ],
+  "html_lang": [
+    "fr"
+  ],
+  "jsonld_types": [
+    "WebSite",
+    "WebSite"
+  ],
+  "meta_description": [],
+  "meta_robots": [
+    "robots: NOINDEX,NOFOLLOW",
+    "bingbot: noarchive"
+  ],
+  "og_description": [],
+  "og_image": [],
+  "og_title": [
+    "Bienvenue — Acme"
+  ],
+  "og_url": [],
+  "redirect_target": [],
+  "status": [
+    "200"
+  ],
+  "title": [
+    "Bienvenue chez Acme"
+  ],
+  "x_robots_tag": []
+}
