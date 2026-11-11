@@ -45,7 +45,7 @@ One pass over a Project's Page pool, started by its schedule or manually. A Proj
 _Avoid_: Run, crawl, scan, job
 
 **Fetch**:
-One attempt by a Check to retrieve one Page. It ends in a Snapshot, a Fetch failure, or a skip. A Page has at most one Fetch per Check.
+One attempt by a Check to retrieve one Page. It ends in a Snapshot, a Fetch failure, or a skip. A skip sends no request: robots.txt disallows the Page (or could not be read), or the Check was cancelled first. A Page has at most one Fetch per Check.
 _Avoid_: Job, task, request
 
 **Snapshot**:
@@ -53,7 +53,7 @@ What one fetch of one Page during a Check stored when an HTTP response was recei
 _Avoid_: Response, capture, version
 
 **Fetch failure**:
-A fetch of a Page during a Check that received no HTTP response (timeout, DNS, TLS, connection error, or an HTML body over the size cap). It is not a Snapshot and never serves as a Diff baseline.
+A fetch of a Page during a Check that received no HTTP response (timeout, DNS, TLS, connection error, or an HTML body over the size cap). It is not a Snapshot, never serves as a Diff baseline, and is never retried within the Check.
 _Avoid_: Error snapshot, failed Snapshot
 
 **SEO fields**:
@@ -69,5 +69,5 @@ A rule that stops a known-volatile part of a response from counting as a change 
 _Avoid_: Filter, ignore pattern, exclude pattern (exclusion is about Pages), diff setting
 
 **Report**:
-The view of one finished Check: its changed Pages (non-empty Diffs) ranked by significance, plus the Pages that were new, vanished, retired, or had a fetch failure in that Check. Unchanged Pages are only counted. Every finished or cancelled Check has one, however many Fetches failed; a cancelled Check's Report is marked partial.
+The view of one finished Check: its changed Pages (non-empty Diffs) ranked by significance, plus the Pages that were new, vanished, retired, or had a fetch failure in that Check. Unchanged and skipped Pages are only counted. Every finished or cancelled Check has one, however many Fetches failed; a cancelled Check's Report is marked partial.
 _Avoid_: Summary, digest, result
