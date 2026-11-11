@@ -1,14 +1,18 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -181,7 +185,65 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 			Rows []dbgen.ListPageEventsRow
 		}{sec.id, rows}
 	}
+	changed, err := s.changedPages(r, c.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	data["Changed"] = changed
+	counts, err := s.q.CountDiffs(r.Context(), c.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	data["ChangedCount"], data["UnchangedCount"] = counts.Changed, counts.Unchanged
 	s.render(w, r, "report", fmt.Sprintf("Check #%d", c.ID), crumbs, data)
+}
+
+// changedRow is one Page in the Changed Pages section.
+type changedRow struct {
+	SnapshotID int64
+	URL        string
+	Tier       string
+	Badges     []string
+	SEO        []string // "field: before → after"
+}
+
+func (s *server) changedPages(r *http.Request, checkID int64) ([]changedRow, error) {
+	rows, err := s.q.ListChangedPages(r.Context(), checkID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]changedRow, 0, len(rows))
+	for _, d := range rows {
+		row := changedRow{SnapshotID: d.SnapshotID, URL: d.Url, Tier: d.Tier}
+		for _, b := range []struct {
+			on   bool
+			name string
+		}{{d.StatusChanged, "status"}, {d.SeoChanged, "SEO"}, {d.HeadersChanged, "headers"}, {d.BodyChanged, "body"}} {
+			if b.on {
+				row.Badges = append(row.Badges, b.name)
+			}
+		}
+		var changes map[string]diff.SEOChange
+		if err := json.Unmarshal(d.SeoChanges, &changes); err != nil {
+			return nil, err
+		}
+		for _, k := range seo.Keys {
+			if c, ok := changes[k]; ok {
+				row.SEO = append(row.SEO, fmt.Sprintf("%s: %s → %s", k, seoValues(c.Before), seoValues(c.After)))
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func seoValues(vs []string) string {
+	if len(vs) == 0 {
+		return "(none)"
+	}
+	return strings.Join(vs, " | ")
 }
 
 // checkProgress is the htmx fragment polled while a Check runs. Once the

@@ -27,3 +27,30 @@ SELECT s.id FROM snapshots s
 WHERE s.page_id = sqlc.arg(page_id)
   AND (s.fetched_at, s.id) > (sqlc.arg(fetched_at)::timestamptz, sqlc.arg(id)::bigint)
 ORDER BY s.fetched_at, s.id LIMIT 1;
+
+-- name: LatestSnapshotOfPage :one
+-- The Page's newest Snapshot: the baseline for the one about to be stored.
+SELECT id, headers, seo_fields, body_sha256 FROM snapshots
+WHERE page_id = $1
+ORDER BY fetched_at DESC, id DESC LIMIT 1;
+
+-- name: InsertDiff :exec
+INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, seo_changes, tier)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: ListChangedPages :many
+-- A Check's non-empty Diffs, most significant first, then by URL.
+SELECT p.id AS page_id, p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+    d.body_changed, d.seo_changes, d.tier
+FROM diffs d
+JOIN snapshots s ON s.id = d.snapshot_id
+JOIN pages p ON p.id = s.page_id
+WHERE s.check_id = $1 AND d.tier <> 'empty'
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 ELSE 3 END, p.url;
+
+-- name: CountDiffs :one
+SELECT
+    count(*) FILTER (WHERE d.tier <> 'empty')::bigint AS changed,
+    count(*) FILTER (WHERE d.tier = 'empty')::bigint AS unchanged
+FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
+WHERE s.check_id = $1;

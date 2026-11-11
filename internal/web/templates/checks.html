@@ -51,6 +51,15 @@
 {{template "pageEvents" .Vanished}}
 <h2>Retired Pages</h2>
 {{template "pageEvents" .Retired}}
+<h2>Changed Pages</h2>
+<p id="counts"><b class="changed">{{.ChangedCount}}</b> changed, <b class="unchanged">{{.UnchangedCount}}</b> unchanged</p>
+{{if .Changed}}<table id="changed">
+<tr><th>Page</th><th>Tier</th><th>Changed</th><th>SEO</th></tr>
+{{range .Changed}}<tr><td class="mono"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
+<td><span class="badge tier tier-{{.Tier}}">{{.Tier}}</span></td>
+<td class="badges">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</td>
+<td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}</td></tr>{{end}}
+</table>{{end}}
 <h2>Fetch failures</h2>
 {{if .Failures}}<table id="failures">
 <tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
