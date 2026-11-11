@@ -45,7 +45,7 @@
 <h2>Fetch failures</h2>
 {{if .Failures}}<table id="failures">
 <tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
-{{range .Failures}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
+{{range .Failures}}<tr><td class="mono">{{.URL}}</td><td><span class="badge">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
 <td>{{if .AlsoFailedPreviously}}<span class="badge also">also failed in the previous Check</span>{{end}}</td></tr>{{end}}
 </table>{{else}}<p class="muted">None.</p>{{end}}
 {{end}}
@@ -54,6 +54,6 @@
 {{template "tabs" .}}
 <table id="pages">
 <tr><th>Page</th><th>State</th><th>Last status</th></tr>
-{{range .Pages}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
+{{range .Pages}}<tr><td class="mono">{{.URL}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
 </table>
 {{end}}

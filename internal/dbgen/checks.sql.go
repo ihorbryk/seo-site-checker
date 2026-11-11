@@ -711,16 +711,18 @@ const planFetches = `-- name: PlanFetches :execrows
 INSERT INTO fetches (check_id, page_id)
 SELECT $1, pg.id FROM pages pg
 WHERE pg.project_id = $2 AND pg.state = 'active'
+  AND pg.id = ANY($3::bigint[])
 ORDER BY pg.id
 `
 
 type PlanFetchesParams struct {
 	CheckID   int64
 	ProjectID int64
+	PageIds   []int64
 }
 
 func (q *Queries) PlanFetches(ctx context.Context, arg PlanFetchesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, planFetches, arg.CheckID, arg.ProjectID)
+	result, err := q.db.Exec(ctx, planFetches, arg.CheckID, arg.ProjectID, arg.PageIds)
 	if err != nil {
 		return 0, err
 	}

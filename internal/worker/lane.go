@@ -9,6 +9,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/ihorbryk/seo-site-checker/internal/links"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
@@ -215,6 +216,20 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 	if err != nil {
 		return err
 	}
+	// Excluded URLs (by the Check's copy of the patterns) are not added to the
+	// pool and get no Fetch; the seed Page can't be excluded.
+	settings, err := check.ParseSettings(chk.Settings)
+	if err != nil {
+		return err
+	}
+	seed := "https://" + urlnorm.Host(f.Url) + "/"
+	kept := found.Links[:0:0]
+	for _, l := range found.Links {
+		if l.URL == seed || !exclude.Excluded(settings.ExcludePatterns, l.URL) {
+			kept = append(kept, l)
+		}
+	}
+	found.Links = kept
 	if len(found.Links) > 0 {
 		urls := make([]string, 0, len(found.Links))
 		for _, l := range found.Links {

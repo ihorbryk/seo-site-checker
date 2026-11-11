@@ -9,6 +9,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -99,7 +100,19 @@ func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": pages})
+	type poolRow struct {
+		URL, State string
+		LastStatus int32
+	}
+	rows := make([]poolRow, 0, len(pages))
+	for _, pg := range pages {
+		state := pg.State
+		if state == "active" && pg.Origin != "seed" && exclude.Excluded(p.ExcludePatterns, pg.Url) {
+			state = "matches exclude pattern"
+		}
+		rows = append(rows, poolRow{URL: pg.Url, State: state, LastStatus: pg.LastStatus})
+	}
+	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": rows})
 }
 
 func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {

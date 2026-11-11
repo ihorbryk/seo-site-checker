@@ -31,5 +31,6 @@ UPDATE projects SET
     custom_headers = sqlc.arg(custom_headers),
     timeout_s = sqlc.arg(timeout_s),
     max_parallel = sqlc.arg(max_parallel),
-    respect_robots = sqlc.arg(respect_robots)
+    respect_robots = sqlc.arg(respect_robots),
+    exclude_patterns = sqlc.arg(exclude_patterns)::text[]
 WHERE id = sqlc.arg(id);

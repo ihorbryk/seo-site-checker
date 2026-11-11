@@ -7,6 +7,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -51,7 +52,17 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 	if err != nil {
 		return err
 	}
-	pending, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID})
+	pages, err := q.ListPagesByProject(ctx, c.ProjectID)
+	if err != nil {
+		return err
+	}
+	var planned []int64
+	for _, pg := range pages {
+		if pg.State == "active" && (pg.Origin == "seed" || !exclude.Excluded(settings.ExcludePatterns, pg.Url)) {
+			planned = append(planned, pg.ID)
+		}
+	}
+	pending, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID, PageIds: planned})
 	if err != nil {
 		return err
 	}

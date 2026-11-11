@@ -216,18 +216,20 @@ UPDATE projects SET
     custom_headers = $3,
     timeout_s = $4,
     max_parallel = $5,
-    respect_robots = $6
-WHERE id = $7
+    respect_robots = $6,
+    exclude_patterns = $7::text[]
+WHERE id = $8
 `
 
 type UpdateProjectRequestSettingsParams struct {
-	Schedule      string
-	UserAgent     string
-	CustomHeaders []byte
-	TimeoutS      int32
-	MaxParallel   int32
-	RespectRobots bool
-	ID            int64
+	Schedule        string
+	UserAgent       string
+	CustomHeaders   []byte
+	TimeoutS        int32
+	MaxParallel     int32
+	RespectRobots   bool
+	ExcludePatterns []string
+	ID              int64
 }
 
 func (q *Queries) UpdateProjectRequestSettings(ctx context.Context, arg UpdateProjectRequestSettingsParams) error {
@@ -238,6 +240,7 @@ func (q *Queries) UpdateProjectRequestSettings(ctx context.Context, arg UpdatePr
 		arg.TimeoutS,
 		arg.MaxParallel,
 		arg.RespectRobots,
+		arg.ExcludePatterns,
 		arg.ID,
 	)
 	return err

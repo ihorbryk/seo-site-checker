@@ -23,6 +23,7 @@ WHERE id = $1;
 INSERT INTO fetches (check_id, page_id)
 SELECT sqlc.arg(check_id), pg.id FROM pages pg
 WHERE pg.project_id = sqlc.arg(project_id) AND pg.state = 'active'
+  AND pg.id = ANY(sqlc.arg(page_ids)::bigint[])
 ORDER BY pg.id;
 
 -- name: ClaimNextFetch :one
