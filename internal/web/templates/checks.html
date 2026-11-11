@@ -58,7 +58,7 @@
 {{range .Changed}}<tr><td class="mono"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
 <td><span class="badge tier tier-{{.Tier}}">{{.Tier}}</span></td>
 <td class="badges">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</td>
-<td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}</td></tr>{{end}}
+<td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}{{if .Chain}}<div class="chain mono">{{.Chain}}</div>{{end}}</td></tr>{{end}}
 </table>{{end}}
 <h2>Fetch failures</h2>
 {{if .Failures}}<table id="failures">

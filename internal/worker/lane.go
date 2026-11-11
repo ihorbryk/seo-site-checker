@@ -14,6 +14,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
 	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/ihorbryk/seo-site-checker/internal/links"
+	"github.com/ihorbryk/seo-site-checker/internal/redirect"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
@@ -201,6 +202,13 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
+	// A 3xx body is never parsed, diffed or stored; its redirect target is the
+	// Snapshot's content.
+	host := urlnorm.Host(f.Url)
+	target := redirect.Classify(res.Status, res.Headers, f.Url, host)
+	if res.Status >= 300 && res.Status < 400 {
+		res.Body, res.HasBody = nil, false
+	}
 	var sum []byte
 	if res.HasBody {
 		h := sha256.Sum256(res.Body)
@@ -218,6 +226,7 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	}
 	fields := seo.Extract(seo.Input{
 		Status: res.Status, Headers: res.Headers, Body: res.Body, HasBody: res.HasBody,
+		RedirectTarget: target.URL,
 	})
 	seoFields, err := json.Marshal(fields)
 	if err != nil {
@@ -239,19 +248,30 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	if err := q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: f.ID, DurationMs: dur}); err != nil {
 		return err
 	}
-	if res.HasBody && res.Status >= 200 && res.Status < 300 {
-		return discover(ctx, q, chk, f, res.Body)
+	switch {
+	case res.HasBody && res.Status >= 200 && res.Status < 300:
+		found, err := links.Extract(res.Body, f.Url, host)
+		if err != nil {
+			return err
+		}
+		return discover(ctx, q, chk, f, found)
+	case target.Kind == redirect.OnDomain:
+		// The only link a 3xx has is its redirect target.
+		found := links.Result{}
+		if reason := urlnorm.Violation(target.URL); reason != "" {
+			found.Dropped = []links.Dropped{{URL: target.URL, Reason: reason}}
+		} else {
+			found.Links = []links.Link{{URL: target.URL, Source: links.SourceRedirect}}
+		}
+		return discover(ctx, q, chk, f, found)
 	}
 	return nil
 }
 
-// discover stores the outgoing links of a 2xx HTML Snapshot, turns new URLs
-// into discovered Pages with pending Fetches, and records dropped URLs.
-func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, body []byte) error {
-	found, err := links.Extract(body, f.Url, urlnorm.Host(f.Url))
-	if err != nil {
-		return err
-	}
+// discover stores a Snapshot's outgoing links (those of a 2xx HTML page, or a
+// 3xx's redirect target), turns new URLs into discovered Pages with pending
+// Fetches, and records dropped URLs.
+func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, found links.Result) error {
 	// Excluded URLs (by the Check's copy of the patterns) are not added to the
 	// pool and get no Fetch; the seed Page can't be excluded.
 	settings, err := check.ParseSettings(chk.Settings)

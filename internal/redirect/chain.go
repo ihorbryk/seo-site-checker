@@ -15,12 +15,12 @@ type Snap struct {
 type Stop int
 
 const (
-	StopFinal      Stop = iota // reached a Snapshot that does not redirect
-	StopOffDomain              // the last URL is off-domain: not fetched
-	StopInsecure               // the last URL is http: not fetched
-	StopMissing                // the last URL has no Snapshot in the Check
-	StopLoop                   // the last URL was already in the chain
-	StopMaxHops                // 10 redirects followed and it still goes on
+	StopFinal     Stop = iota // reached a Snapshot that does not redirect
+	StopOffDomain             // the last URL is off-domain: not fetched
+	StopInsecure              // the last URL is http: not fetched
+	StopMissing               // the last URL has no Snapshot in the Check
+	StopLoop                  // the last URL was already in the chain
+	StopMaxHops               // 10 redirects followed and it still goes on
 )
 
 // Chain is the URLs a redirect passes through, from the first URL to the last.
@@ -69,6 +69,19 @@ func BuildChain(start, host string, lookup func(url string) (Snap, bool)) Chain 
 		seen[snap.Target] = true
 		cur = snap.Target
 	}
+}
+
+// Label renders the chain for a Report row or Page history: the URLs joined
+// by arrows, with a loop or a cut-off after 10 hops marked.
+func (c Chain) Label() string {
+	s := strings.Join(c.URLs, " → ")
+	switch c.Stop {
+	case StopLoop:
+		s += " (loop)"
+	case StopMaxHops:
+		s += " (stopped after 10 hops)"
+	}
+	return s
 }
 
 func hostOf(u string) string {

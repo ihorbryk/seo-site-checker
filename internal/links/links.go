@@ -16,6 +16,7 @@ const (
 	SourceAnchor    = "a"
 	SourceCanonical = "canonical"
 	SourceHreflang  = "hreflang"
+	SourceRedirect  = "redirect"
 )
 
 // Link is one normalised URL on the Project's host and where it was found.
