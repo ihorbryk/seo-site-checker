@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
@@ -16,19 +17,21 @@ type settingsView struct {
 	Schedule, UserAgent, TimeoutS, MaxParallel string
 	RespectRobots                              bool
 	Headers                                    []check.Header
+	ExcludePatterns                            string
 }
 
 func viewOf(s project.RequestSettings) settingsView {
 	return settingsView{
 		Schedule: s.Schedule, UserAgent: s.UserAgent, TimeoutS: strconv.Itoa(s.TimeoutS), MaxParallel: strconv.Itoa(s.MaxParallel),
 		RespectRobots: s.RespectRobots, Headers: s.Headers,
+		ExcludePatterns: strings.Join(s.ExcludePatterns, "\n"),
 	}
 }
 
 func viewOfForm(f url.Values) settingsView {
 	v := settingsView{
 		Schedule: f.Get("schedule"), UserAgent: f.Get("user_agent"), TimeoutS: f.Get("timeout_s"),
-		MaxParallel: f.Get("max_parallel"), RespectRobots: f.Get("respect_robots") != "",
+		MaxParallel: f.Get("max_parallel"), RespectRobots: f.Get("respect_robots") != "", ExcludePatterns: f.Get("exclude_patterns"),
 	}
 	names, values := f["header_name"], f["header_value"]
 	for i := range max(len(names), len(values)) {
@@ -115,7 +118,7 @@ func (s *server) headerRow(w http.ResponseWriter, r *http.Request) {
 
 func flat(errs project.FieldErrors) []string {
 	var out []string
-	for _, field := range []string{"schedule", "user_agent", "headers", "timeout_s", "max_parallel"} {
+	for _, field := range []string{"schedule", "user_agent", "headers", "timeout_s", "max_parallel", "exclude_patterns"} {
 		out = append(out, errs[field]...)
 	}
 	return out

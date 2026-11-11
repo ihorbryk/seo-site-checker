@@ -79,6 +79,6 @@
 {{template "tabs" .}}
 <table id="pages">
 <tr><th>Page</th><th>State</th><th>Last status</th></tr>
-{{range .Pages}}<tr><td class="mono">{{.Url}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
+{{range .Pages}}<tr><td class="mono">{{.URL}}</td><td><span class="badge">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td></tr>{{end}}
 </table>
 {{end}}
