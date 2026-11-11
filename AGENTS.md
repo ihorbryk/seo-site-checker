@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Development
+
+Tests, shared Postgres, migrations, sqlc and lint: `docs/testing.md`.
+
 ## Agent skills
 
 ### Issue tracker
