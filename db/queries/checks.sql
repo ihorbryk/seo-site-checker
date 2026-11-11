@@ -1,0 +1,113 @@
+-- name: CreateCheck :one
+INSERT INTO checks (project_id, trigger) VALUES ($1, $2) RETURNING *;
+
+-- name: GetCheck :one
+SELECT * FROM checks WHERE id = $1;
+
+-- name: LockCheck :one
+SELECT * FROM checks WHERE id = $1 FOR UPDATE;
+
+-- name: GetActiveCheck :one
+SELECT * FROM checks
+WHERE project_id = $1 AND state IN ('queued', 'running', 'cancelling');
+
+-- name: GetProject :one
+SELECT * FROM projects WHERE id = $1;
+
+-- name: MarkCheckRunning :exec
+UPDATE checks
+SET state = 'running', started_at = now(), settings = $2, noise_rules = $3, lanes = $4
+WHERE id = $1;
+
+-- name: PlanFetches :execrows
+INSERT INTO fetches (check_id, page_id)
+SELECT sqlc.arg(check_id), pg.id FROM pages pg
+WHERE pg.project_id = sqlc.arg(project_id) AND pg.state = 'active'
+ORDER BY pg.id;
+
+-- name: ClaimNextFetch :one
+-- Claims one pending Fetch for the lane job, skipping rows other lanes hold.
+UPDATE fetches SET state = 'in_flight', job_id = sqlc.arg(job_id), started_at = now()
+WHERE id = (
+    SELECT f.id FROM fetches f
+    WHERE f.check_id = sqlc.arg(check_id) AND f.state = 'pending'
+    ORDER BY f.id
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING id;
+
+-- name: GetClaimedFetch :one
+SELECT f.id, f.check_id, f.page_id, p.url, p.project_id
+FROM fetches f JOIN pages p ON p.id = f.page_id
+WHERE f.job_id = $1 AND f.state = 'in_flight';
+
+-- name: FinishFetchSnapshot :exec
+UPDATE fetches SET state = 'done', outcome = 'snapshot', duration_ms = $2 WHERE id = $1;
+
+-- name: FinishFetchFailure :exec
+UPDATE fetches
+SET state = 'done', outcome = 'failure', failure_kind = $2, message = $3, duration_ms = $4
+WHERE id = $1;
+
+-- name: InsertBody :exec
+INSERT INTO bodies (project_id, sha256, content, size)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (project_id, sha256) DO NOTHING;
+
+-- name: InsertSnapshot :exec
+INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: SetFetchJob :exec
+UPDATE fetches SET job_id = $2 WHERE id = $1;
+
+-- name: SetCheckLanes :exec
+UPDATE checks SET lanes = $2 WHERE id = $1;
+
+-- name: FinishCheck :exec
+UPDATE checks
+SET state = 'finished', finished_at = now(),
+    count_snapshots = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'snapshot'),
+    count_failures = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'failure'),
+    count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
+WHERE checks.id = $1;
+
+-- name: CheckProgress :one
+SELECT
+    count(*)::bigint AS known,
+    count(*) FILTER (WHERE state = 'done')::bigint AS fetched,
+    count(*) FILTER (WHERE outcome = 'failure')::bigint AS failures
+FROM fetches WHERE check_id = $1;
+
+-- name: ListInFlightFetches :many
+SELECT f.id, f.job_id, p.url
+FROM fetches f JOIN pages p ON p.id = f.page_id
+WHERE f.check_id = $1 AND f.state = 'in_flight'
+ORDER BY f.id;
+
+-- name: ListFetchFailures :many
+-- Fetch failures of a Check, with whether the Page also failed in the
+-- Project's previous Check (the newest earlier Check that has ended).
+SELECT p.url, f.failure_kind, f.message,
+    EXISTS (
+        SELECT 1 FROM fetches pf
+        WHERE pf.page_id = f.page_id AND pf.outcome = 'failure'
+          AND pf.check_id = (
+              SELECT c2.id FROM checks c2
+              WHERE c2.project_id = c.project_id AND c2.id < c.id
+                AND c2.state IN ('finished', 'cancelled')
+              ORDER BY c2.id DESC LIMIT 1)
+    ) AS also_failed_previously
+FROM fetches f
+JOIN checks c ON c.id = f.check_id
+JOIN pages p ON p.id = f.page_id
+WHERE f.check_id = $1 AND f.outcome = 'failure'
+ORDER BY p.url;
+
+-- name: ListCheckRows :many
+SELECT c.*,
+    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
+    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
+    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
+FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC;

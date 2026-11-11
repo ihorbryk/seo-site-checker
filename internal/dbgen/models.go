@@ -60,6 +60,44 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 	return string(ns.RiverJobState), nil
 }
 
+type Body struct {
+	ProjectID int64
+	Sha256    []byte
+	Content   []byte
+	Size      int32
+}
+
+type Check struct {
+	ID                    int64
+	ProjectID             int64
+	Trigger               string
+	State                 string
+	CreatedAt             time.Time
+	StartedAt             pgtype.Timestamptz
+	FinishedAt            pgtype.Timestamptz
+	Settings              []byte
+	NoiseRules            []byte
+	Lanes                 int32
+	OrphanCountingSkipped bool
+	CountSnapshots        int32
+	CountFailures         int32
+	CountSkipped          int32
+}
+
+type Fetch struct {
+	ID          int64
+	CheckID     int64
+	PageID      int64
+	State       string
+	JobID       pgtype.Int8
+	Outcome     pgtype.Text
+	SkipReason  pgtype.Text
+	FailureKind pgtype.Text
+	Message     pgtype.Text
+	StartedAt   pgtype.Timestamptz
+	DurationMs  pgtype.Int4
+}
+
 type Page struct {
 	ID           int64
 	ProjectID    int64
@@ -124,4 +162,15 @@ type RiverQueue struct {
 	Metadata  []byte
 	PausedAt  pgtype.Timestamptz
 	UpdatedAt time.Time
+}
+
+type Snapshot struct {
+	ID         int64
+	PageID     int64
+	CheckID    int64
+	FetchedAt  time.Time
+	Status     int32
+	Headers    []byte
+	BodySha256 []byte
+	SeoFields  []byte
 }

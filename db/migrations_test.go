@@ -38,7 +38,7 @@ func TestMigrationsGoDownToZeroAndBackUp(t *testing.T) {
 	if _, err := p.Up(ctx); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
-	for _, table := range []string{"projects", "pages", "river_job"} {
+	for _, table := range []string{"projects", "pages", "river_job", "checks", "fetches", "bodies", "snapshots"} {
 		var ok bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&ok); err != nil || !ok {
 			t.Fatalf("table %s missing after migrating back up (err %v)", table, err)
