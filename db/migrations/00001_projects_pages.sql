@@ -13,6 +13,20 @@ CREATE TABLE projects (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- +goose StatementBegin
+CREATE FUNCTION projects_domain_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.domain IS DISTINCT FROM OLD.domain THEN
+        RAISE EXCEPTION 'a Project''s domain cannot be changed';
+    END IF;
+    RETURN NEW;
+END
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER projects_domain_immutable BEFORE UPDATE ON projects
+    FOR EACH ROW EXECUTE FUNCTION projects_domain_immutable();
+
 CREATE TABLE pages (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     project_id bigint NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
@@ -30,3 +44,4 @@ CREATE INDEX pages_project_state_idx ON pages (project_id, state);
 -- +goose Down
 DROP TABLE pages;
 DROP TABLE projects;
+DROP FUNCTION projects_domain_immutable();

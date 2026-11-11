@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/pressly/goose/v3 v3.30.0
+	golang.org/x/net v0.62.0
 )
 
 require (
