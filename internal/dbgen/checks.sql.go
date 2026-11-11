@@ -266,8 +266,8 @@ func (q *Queries) InsertBody(ctx context.Context, arg InsertBodyParams) error {
 }
 
 const insertSnapshot = `-- name: InsertSnapshot :exec
-INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256, seo_fields)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertSnapshotParams struct {
@@ -278,6 +278,7 @@ type InsertSnapshotParams struct {
 	Status     int32
 	Headers    []byte
 	BodySha256 []byte
+	SeoFields  []byte
 }
 
 func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) error {
@@ -289,6 +290,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 		arg.Status,
 		arg.Headers,
 		arg.BodySha256,
+		arg.SeoFields,
 	)
 	return err
 }
@@ -352,6 +354,46 @@ func (q *Queries) ListCheckRows(ctx context.Context, projectID int64) ([]ListChe
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueProjects = `-- name: ListDueProjects :many
+SELECT p.id FROM projects p
+WHERE p.schedule <> 'manual'
+  AND NOT EXISTS (
+      SELECT 1 FROM checks a
+      WHERE a.project_id = p.id AND a.state IN ('queued', 'running', 'cancelling'))
+  AND COALESCE(
+      (SELECT max(c.created_at) FROM checks c WHERE c.project_id = p.id AND c.trigger = 'scheduled')
+          + CASE p.schedule
+              WHEN 'hourly' THEN interval '1 hour'
+              WHEN 'daily' THEN interval '1 day'
+              ELSE interval '7 days'
+            END,
+      '-infinity'::timestamptz) <= $1::timestamptz
+ORDER BY p.id
+`
+
+// Projects whose schedule is due at now: not manual, no active Check, and no
+// scheduled Check yet or the last one's creation time + interval <= now.
+// Manual Checks don't count; a cancelled scheduled Check does.
+func (q *Queries) ListDueProjects(ctx context.Context, now time.Time) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listDueProjects, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -511,6 +553,20 @@ func (q *Queries) PlanFetches(ctx context.Context, arg PlanFetchesParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setCheckCreatedAt = `-- name: SetCheckCreatedAt :exec
+UPDATE checks SET created_at = $2 WHERE id = $1
+`
+
+type SetCheckCreatedAtParams struct {
+	ID        int64
+	CreatedAt time.Time
+}
+
+func (q *Queries) SetCheckCreatedAt(ctx context.Context, arg SetCheckCreatedAtParams) error {
+	_, err := q.db.Exec(ctx, setCheckCreatedAt, arg.ID, arg.CreatedAt)
+	return err
 }
 
 const setCheckLanes = `-- name: SetCheckLanes :exec

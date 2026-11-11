@@ -1,0 +1,27 @@
+{
+  "canonical": [],
+  "content_type": [
+    "text/html; charset=utf-8"
+  ],
+  "h1": [
+    "Page not found",
+    ""
+  ],
+  "hreflang": [],
+  "html_lang": [],
+  "jsonld_types": [],
+  "meta_description": [],
+  "meta_robots": [],
+  "og_description": [],
+  "og_image": [],
+  "og_title": [],
+  "og_url": [],
+  "redirect_target": [],
+  "status": [
+    "404"
+  ],
+  "title": [
+    "Not found \u003cmeta name=description content=unquoted\u003e \u003ctitle\u003eSecond title"
+  ],
+  "x_robots_tag": []
+}

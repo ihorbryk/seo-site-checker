@@ -1,0 +1,32 @@
+{{define "snapshot"}}
+<h1>Snapshot #{{.Snap.ID}} <span class="mono">{{.Snap.Url}}</span></h1>
+<p id="snapshot-meta" class="muted">
+<span class="badge">{{.Snap.Status}}</span>
+<a href="/c/{{.Snap.CheckID}}">Check #{{.Snap.CheckID}}</a> · {{.Fetched}} · {{.Timing}} · {{.Size}}
+· <a class="mono" href="{{.Snap.Url}}">{{.Snap.Url}}</a>
+</p>
+<p>
+{{if .Prev}}<a id="prev-snapshot" href="/s/{{.Prev}}">← Previous Snapshot</a>{{end}}
+{{if and .Prev .Next}} · {{end}}
+{{if .Next}}<a id="next-snapshot" href="/s/{{.Next}}">Next Snapshot →</a>{{end}}
+</p>
+<nav class="tabs">
+<a href="/s/{{.Snap.ID}}?tab=seo">{{if eq .Tab "seo"}}<b>SEO fields</b>{{else}}SEO fields{{end}}</a> ·
+<a href="/s/{{.Snap.ID}}?tab=headers">{{if eq .Tab "headers"}}<b>Headers</b>{{else}}Headers{{end}}</a> ·
+<a href="/s/{{.Snap.ID}}?tab=html">{{if eq .Tab "html"}}<b>Raw HTML</b>{{else}}Raw HTML{{end}}</a>
+</nav>
+{{if eq .Tab "seo"}}
+<table id="seo">
+<tr><th>Field</th><th>Values</th></tr>
+{{range .SEO}}<tr><th>{{.Name}}</th><td>{{if .Values}}<ul>{{range .Values}}<li class="mono">{{.}}</li>{{end}}</ul>{{else}}<span class="muted">∅</span>{{end}}</td></tr>
+{{end}}</table>
+{{else if eq .Tab "headers"}}
+<table id="headers">
+<tr><th>Name</th><th>Value</th></tr>
+{{range .Headers}}<tr><th>{{index . 0}}</th><td class="mono">{{index . 1}}</td></tr>
+{{end}}</table>
+{{else}}
+{{if .HasBody}}<pre class="raw mono" style="white-space:pre-wrap;background:#fff;padding:10px;border:1px solid #e6e8ec">{{.Raw}}</pre>
+{{else}}<p id="no-body" class="muted">No body stored</p>{{end}}
+{{end}}
+{{end}}
