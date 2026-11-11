@@ -28,13 +28,7 @@ func TestCancellingMidCheckKeepsInFlightSnapshotsSkipsTheRestAndWritesNoOrphanEv
 	site.Fault("/a", fakesite.Fault{Delay: 3 * time.Second})
 	hitsBefore := site.Hits("/a")
 	id := s.RunCheck(p)
-	deadline := time.Now().Add(10 * time.Second)
-	for site.Hits("/a") == hitsBefore {
-		if time.Now().After(deadline) {
-			t.Fatal("/a was never requested")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	s.WaitFor(func() bool { return site.Hits("/a") > hitsBefore })
 	s.Cancel(id)
 	if got := s.Page(s.Get("/c/" + itoa(id))).Find("#progress").Text(); !strings.Contains(got, "Cancelling") {
 		t.Errorf("progress while cancelling: %q", got)

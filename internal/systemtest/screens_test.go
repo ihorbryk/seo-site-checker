@@ -152,7 +152,7 @@ func TestLiveProgressShowsNewlyDiscoveredPages(t *testing.T) {
 	s.Exec(`UPDATE projects SET max_parallel = 1 WHERE id = $1`, p.ID)
 
 	id := s.RunCheck(p)
-	waitFor(t, func() bool { return site.Hits("/a") > 0 })
+	s.WaitFor(func() bool { return site.Hits("/a") > 0 })
 
 	got := text(s.Page(s.GetHTMX("/c/"+itoa(id)+"/progress")), ".discovered")
 	if got != "2" {

@@ -83,7 +83,7 @@ func TestEditingNoiseRulesDuringACheckDoesNotAffectThatCheck(t *testing.T) {
 	site.Set("/", diffPage(pageA, "X-Build", "2"))
 	site.Fault("/", fakesite.Fault{Delay: 500 * time.Millisecond})
 	running := s.RunCheck(p)
-	waitFor(t, func() bool { return site.Hits("/") == 2 })
+	s.WaitFor(func() bool { return site.Hits("/") == 2 })
 	s.SaveNoiseRules(p, url.Values{"header_names": {"x-build"}})
 	if got := changedRows(s.WaitForCheck(running)); len(got) != 1 {
 		t.Errorf("running Check used the edited rules: changed = %v", got)

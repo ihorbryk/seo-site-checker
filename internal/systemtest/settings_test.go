@@ -28,7 +28,7 @@ func TestSettingsEditedDuringACheckApplyFromTheNextCheck(t *testing.T) {
 	site.Fault("/", fakesite.Fault{Delay: 600 * time.Millisecond})
 
 	first := s.RunCheck(p)
-	waitFor(t, func() bool { return site.Hits("/") == 1 })
+	s.WaitFor(func() bool { return site.Hits("/") == 1 })
 	s.SaveRequestSettings(p, url.Values{
 		"schedule": {"manual"}, "user_agent": {"Googlebot/2.1"}, "timeout_s": {"30"}, "max_parallel": {"1"},
 		"header_name": {"X-Env", "Authorization"}, "header_value": {"new", "Bearer t"},
@@ -49,16 +49,5 @@ func TestSettingsEditedDuringACheckApplyFromTheNextCheck(t *testing.T) {
 	}
 	if h := got[1]; h.Get("User-Agent") != "Googlebot/2.1" || h.Get("X-Env") != "new" || h.Get("Authorization") != "Bearer t" {
 		t.Errorf("next Check did not use the new settings: %v", h)
-	}
-}
-
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(systemtest.WaitTimeout)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition not met in time")
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

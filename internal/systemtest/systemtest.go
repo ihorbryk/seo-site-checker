@@ -273,6 +273,18 @@ func (s *System) WaitForCheck(id int64) *goquery.Document {
 	}
 }
 
+// WaitFor polls cond until it holds and fails the test after WaitTimeout.
+func (s *System) WaitFor(cond func() bool) {
+	s.T.Helper()
+	deadline := time.Now().Add(WaitTimeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			s.T.Fatalf("condition not met after %s", WaitTimeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // Cancel presses Cancel on the Check's page.
 func (s *System) Cancel(checkID int64) {
 	s.T.Helper()

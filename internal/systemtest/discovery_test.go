@@ -1,6 +1,7 @@
 package systemtest_test
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,10 +37,13 @@ func poolRows(t *testing.T, s *systemtest.System, p dbgen.Project) []string {
 	return rows
 }
 
+// sameSet reports whether got and want hold the same strings, in any order.
+// It does not modify either slice.
 func sameSet(got, want []string) bool {
-	sort.Strings(got)
-	sort.Strings(want)
-	return strings.Join(got, "\n") == strings.Join(want, "\n")
+	g, w := slices.Clone(got), slices.Clone(want)
+	slices.Sort(g)
+	slices.Sort(w)
+	return slices.Equal(g, w)
 }
 
 func TestALinkedSiteIsFullyFetchedInOneCheck(t *testing.T) {
