@@ -67,11 +67,23 @@ UPDATE checks SET lanes = $2 WHERE id = $1;
 
 -- name: FinishCheck :exec
 UPDATE checks
-SET state = 'finished', finished_at = now(),
+SET state = sqlc.arg(state), finished_at = now(),
     count_snapshots = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'snapshot'),
     count_failures = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'failure'),
     count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
-WHERE checks.id = $1;
+WHERE checks.id = sqlc.arg(id);
+
+-- name: RequestCancel :execrows
+-- A queued Check has nothing to wind down and is cancelled at once; a running
+-- one becomes `cancelling` and its lanes stop claiming Fetches.
+UPDATE checks
+SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
+    finished_at = CASE WHEN state = 'queued' THEN now() END
+WHERE id = $1 AND state IN ('queued', 'running');
+
+-- name: SkipPendingFetches :exec
+UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
+WHERE check_id = $1 AND state = 'pending';
 
 -- name: CheckProgress :one
 SELECT
