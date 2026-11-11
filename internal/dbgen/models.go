@@ -84,6 +84,12 @@ type Check struct {
 	CountSkipped          int32
 }
 
+type DroppedUrl struct {
+	CheckID int64
+	Url     string
+	Reason  string
+}
+
 type Fetch struct {
 	ID          int64
 	CheckID     int64
@@ -96,6 +102,12 @@ type Fetch struct {
 	Message     pgtype.Text
 	StartedAt   pgtype.Timestamptz
 	DurationMs  pgtype.Int4
+}
+
+type Link struct {
+	SnapshotID   int64
+	TargetPageID int64
+	Source       string
 }
 
 type Page struct {
