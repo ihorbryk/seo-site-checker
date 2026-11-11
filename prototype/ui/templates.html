@@ -1,0 +1,394 @@
+{{/* PROTOTYPE — throwaway templates for the UI screens prototype. */}}
+
+{{define "head"}}
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · SEO Site Checker (prototype)</title>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d2330;background:#f6f7f9}
+a{color:#2457c5;text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:20px;margin:0 0 12px}h2{font-size:15px;margin:22px 0 8px}h3{font-size:13px;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em;color:#5b6475}
+table{border-collapse:collapse;width:100%;background:#fff}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e6e8ec;vertical-align:top}
+th{font-weight:600;font-size:12px;color:#5b6475;background:#fafbfc}
+.muted{color:#7a8291}.small{font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;background:#e9ecf1;color:#3b4252;margin-right:3px;white-space:nowrap}
+.t-critical{background:#fde2e1;color:#b42318}.t-SEO{background:#fff1d6;color:#9a5b00}.t-headers{background:#e3ecff;color:#2547a0}.t-body{background:#eceff3;color:#4b5565}
+.st-active{background:#dcf5e6;color:#11743d}.st-orphaned{background:#fff1d6;color:#9a5b00}.st-retired{background:#eceff3;color:#5b6475}.st-ignored{background:#f1e8ff;color:#6b3fb8}.st-excluded{background:#eceff3;color:#5b6475;text-decoration:line-through}
+.s2xx{color:#11743d}.s3xx{color:#9a5b00}.s4xx,.s5xx{color:#b42318;font-weight:600}
+.btn{display:inline-block;border:1px solid #c9ced8;background:#fff;border-radius:6px;padding:5px 11px;font:inherit;cursor:pointer;color:#1d2330}
+.btn.primary{background:#2457c5;border-color:#2457c5;color:#fff}.btn.danger{color:#b42318}
+.flash{background:#dcf5e6;border:1px solid #9fdcb7;padding:6px 10px;border-radius:6px;margin:8px 0;white-space:pre-wrap}.flash.err{background:#fde2e1;border-color:#f3a9a4}
+.banner{background:#fff4e5;border:1px solid #f5c37a;padding:10px 12px;border-radius:6px;margin:10px 0}
+.counts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.counts div{background:#fff;border:1px solid #e1e4ea;border-radius:6px;padding:6px 10px;min-width:78px}.counts b{display:block;font-size:18px}.counts span{font-size:11px;color:#7a8291}
+.chg{background:#fff;border:1px solid #e1e4ea;border-radius:6px;margin:4px 0;padding:8px 10px;display:block;color:inherit}
+a.chg:hover,.chg.click:hover{border-color:#2457c5;text-decoration:none;cursor:pointer}
+.chg .url{font-weight:600}.fc{font-size:12px;margin-top:3px}.fc del{background:#fde2e1;text-decoration:none;padding:0 3px}.fc ins{background:#dcf5e6;text-decoration:none;padding:0 3px}
+.bar{height:10px;background:#e6e8ec;border-radius:5px;overflow:hidden}.bar i{display:block;height:100%;background:#2457c5;transition:width .5s}
+.diff table{font-family:ui-monospace,Menlo,monospace;font-size:12px;table-layout:fixed}
+.diff td{padding:1px 6px;border:0;white-space:pre-wrap;word-break:break-all}.diff td.n{width:38px;color:#9aa1ad;text-align:right;user-select:none}
+.diff .add{background:#e6f7ec}.diff .del{background:#fdecea}.diff .gap td{background:#f0f3f8;color:#7a8291;text-align:center}
+.diff .op{width:14px;color:#9aa1ad}
+.tabs{display:flex;gap:2px;border-bottom:1px solid #d9dde4;margin:10px 0 14px}.tabs a{padding:7px 14px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;color:#5b6475}.tabs a.on{background:#fff;border-color:#d9dde4;color:#1d2330;font-weight:600;margin-bottom:-1px}
+form.settings label{display:block;margin:10px 0 3px;font-weight:600}form.settings .help{font-weight:400;color:#7a8291;font-size:12px}
+input[type=text],input[type=number],select,textarea{font:inherit;padding:5px 7px;border:1px solid #c9ced8;border-radius:5px;width:100%;max-width:520px;background:#fff}
+textarea{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+fieldset{border:1px solid #e1e4ea;border-radius:8px;background:#fff;padding:6px 16px 16px;margin:0 0 18px}legend{font-weight:700;padding:0 6px}
+pre.raw{background:#fff;border:1px solid #e1e4ea;padding:10px;overflow:auto;font-size:12px;max-height:70vh}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#2fb36b;animation:pulse 1.2s infinite}@keyframes pulse{50%{opacity:.3}}
+/* prototype switcher — NOT part of the design */
+#proto-switch{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#111;color:#fff;border-radius:999px;padding:6px 8px;display:flex;gap:6px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.35);z-index:99;font:13px -apple-system,sans-serif}
+#proto-switch button{background:#333;color:#fff;border:0;border-radius:999px;width:28px;height:28px;cursor:pointer;font-size:14px}
+#proto-switch span{padding:0 8px;min-width:190px;text-align:center}#proto-switch .sep{width:1px;height:20px;background:#444;min-width:0;padding:0}
+#proto-switch a{color:#9cc0ff}
+</style>
+{{end}}
+
+{{define "switcher"}}
+<div id="proto-switch">
+  <button onclick="proto(-1)" title="previous variant (←)">←</button>
+  <span><b>{{.V}}</b> ({{.VName}})</span>
+  <button onclick="proto(1)" title="next variant (→)">→</button>
+  <span class="sep"></span>
+  <span style="min-width:0">Diff: <a href="?diff=split">split</a> · <a href="?diff=unified">unified</a></span>
+</div>
+<script>
+const KEYS=[{{range variants}}"{{.Key}}",{{end}}];
+function proto(d){const u=new URL(location);const c="{{.V}}";u.searchParams.set("variant",KEYS[(KEYS.indexOf(c)+d+KEYS.length)%KEYS.length]);location=u}
+addEventListener("keydown",e=>{const t=e.target;if(t.closest("input,textarea,select,[contenteditable]"))return;if(e.key==="ArrowLeft")proto(-1);if(e.key==="ArrowRight")proto(1)});
+</script>
+{{end}}
+
+{{/* ================= shared fragments ================= */}}
+
+{{define "stateBadge"}}<span class="badge st-{{.State}}">{{.State}}{{if eq .State "orphaned"}} {{.Orphans}}/3{{end}}</span>{{end}}
+
+{{define "tierBadges"}}<span class="badge t-{{if eq .Tier 0}}critical{{else if eq .Tier 1}}SEO{{else if eq .Tier 2}}headers{{else}}body{{end}}">{{.TierName}}</span>{{range .Badges}}<span class="badge">{{.}}</span>{{end}}{{end}}
+
+{{define "fieldChanges"}}{{range .}}<div class="fc"><span class="muted">{{.Name}}:</span> <del>{{if .Before}}{{.Before}}{{else}}∅{{end}}</del> → <ins>{{if .After}}{{.After}}{{else}}∅{{end}}</ins></div>{{end}}{{end}}
+
+{{define "changedRow"}}{{/* dict R=Changed Mode=link|pane|inline */}}
+{{with .R}}
+{{if eq $.Mode "pane"}}<div class="chg click" hx-get="/d/{{.Snap.ID}}" hx-target="#pane">
+{{else if eq $.Mode "inline"}}<details class="chg" hx-get="/d/{{.Snap.ID}}" hx-trigger="toggle once" hx-target="find .inline"><summary>
+{{else}}<a class="chg" href="/d/{{.Snap.ID}}">{{end}}
+  {{template "tierBadges" .}} <span class="url">{{.Snap.Page.Path}}</span>
+  {{template "fieldChanges" .Fields}}
+{{if eq $.Mode "pane"}}</div>{{else if eq $.Mode "inline"}}</summary><div class="inline muted">loading Diff…</div></details>{{else}}</a>{{end}}
+{{end}}
+{{end}}
+
+{{define "reportBody"}}{{/* dict R=Report Mode=... */}}
+{{with .R}}
+{{if .Check.SeedFailed}}<div class="banner">⚠ The seed Page <b>/</b> didn't return 2xx HTML in this Check, so orphan counting was skipped: no Page became vanished or retired.</div>{{end}}
+{{if eq .Check.Status "cancelled"}}<div class="banner">This Check was cancelled. The Report is <b>partial</b>: only Pages fetched before cancellation are listed.</div>{{end}}
+<div class="counts">
+  <div><b>{{.Fetched}}</b><span>fetched</span></div>
+  <div><b>{{len .Changed}}</b><span>changed ({{.Critical}} critical, {{.SEO}} SEO)</span></div>
+  <div><b>{{.Unchanged}}</b><span>unchanged</span></div>
+  <div><b>{{len .New}}</b><span>new</span></div>
+  <div><b>{{len .Check.Vanished}}</b><span>vanished</span></div>
+  <div><b>{{len .Check.Retired}}</b><span>retired</span></div>
+  <div><b>{{len .Check.Failures}}</b><span>fetch failures</span></div>
+  {{if .Check.Dropped}}<div><b>{{.Check.Dropped}}</b><span>URLs dropped by limits</span></div>{{end}}
+</div>
+<h2>Changed Pages</h2>
+{{range .Changed}}{{template "changedRow" (dict "R" . "Mode" $.Mode)}}{{else}}<p class="muted">No changed Pages.</p>{{end}}
+{{if .New}}<h2>New Pages</h2><table>{{range .New}}<tr><td><a href="/pg/{{.Page.ID}}">{{.Page.Path}}</a></td><td class="{{statusClass .Status}}">{{.Status}}</td><td class="muted">{{.SEO.Title}}</td><td><a href="/s/{{.ID}}">Snapshot</a></td></tr>{{end}}</table>{{end}}
+{{if .Check.Vanished}}<h2>Vanished Pages</h2><table>{{range .Check.Vanished}}<tr><td><a href="/pg/{{.ID}}">{{.Path}}</a></td><td>{{template "stateBadge" .}}</td><td class="muted">no Snapshot in this Check linked to it; still fetched</td></tr>{{end}}</table>{{end}}
+{{if .Check.Retired}}<h2>Retired Pages</h2><table>{{range .Check.Retired}}<tr><td><a href="/pg/{{.ID}}">{{.Path}}</a></td><td class="muted">orphaned for 3 Checks; no longer fetched</td></tr>{{end}}</table>{{end}}
+{{if .Check.Failures}}<h2>Fetch failures</h2><table>{{range .Check.Failures}}<tr><td><a href="/pg/{{.Page.ID}}">{{.Page.Path}}</a></td><td><span class="badge t-critical">{{.Kind}}</span></td><td class="mono">{{.Detail}}</td><td>{{if .AlsoPrev}}also failed last Check{{else}}<span class="muted">first failure</span>{{end}}</td></tr>{{end}}</table>{{end}}
+{{end}}
+{{end}}
+
+{{define "progress"}}
+<div class="progress" hx-get="/c/{{.Check.ID}}/progress" hx-trigger="every 2s" hx-swap="outerHTML">
+  <div class="bar"><i style="width:{{.Pct}}%"></i></div>
+  <p>{{if .Finalizing}}<b>Finalizing…</b> computing lifecycle (vanished / retired) — the Report appears in a moment. <span class="muted small">(prototype: progress loops)</span>
+  {{else}}<span class="live"></span> Fetched <b>{{.Done}}</b> of {{.Total}} known Pages · {{.Failed}} failed · {{.New}} new found by URL discovery <span class="muted">(the pool can still grow)</span>{{end}}</p>
+  {{if .Lanes}}<div class="small muted">Lanes ({{len .Lanes}} = max parallel requests):</div>
+  <ul class="mono small" style="margin:4px 0">{{range $i, $l := .Lanes}}<li>lane {{add $i 1}} → {{$l}}</li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+
+{{define "runBtn"}}{{/* Project */}}
+<span id="run-{{.ID}}">{{with .Running}}<a href="/c/{{.ID}}"><span class="live"></span> Check #{{.ID}} running</a>
+<button class="btn danger" hx-post="/c/{{.ID}}/cancel" hx-target="#run-{{$.ID}}" hx-swap="beforeend">Cancel</button>
+{{else}}<button class="btn primary" hx-post="/p/{{.ID}}/run" hx-target="#run-{{.ID}}" hx-swap="beforeend">Run Check now</button>{{end}}</span>
+{{end}}
+
+{{define "checksBody"}}
+<p>{{template "runBtn" .P}} <span class="muted small">Schedule: <b>{{.P.Schedule}}</b></span></p>
+<table>
+<tr><th>Check</th><th>Trigger</th><th>Started</th><th>Took</th><th>Status</th><th>Changed</th><th>New / vanished / retired</th><th>Failures</th></tr>
+{{range .P.ChecksDesc}}
+<tr><td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td>{{.Trigger}}</td><td>{{clock .Started}} <span class="muted small">{{ago .Started}}</span></td><td>{{.Duration}}</td>
+{{if eq .Status "running"}}<td colspan="4"><span class="live"></span> running — <a href="/c/{{.ID}}">watch progress</a></td>
+{{else}}{{with .Report}}<td>{{if eq .Check.Status "cancelled"}}<span class="badge">partial</span>{{else}}{{.Check.Status}}{{end}}{{if .Check.SeedFailed}} <span class="badge t-SEO">seed failed</span>{{end}}</td>
+<td>{{len .Changed}}{{if .Critical}} <span class="badge t-critical">{{.Critical}} critical</span>{{end}}{{if .SEO}} <span class="badge t-SEO">{{.SEO}} SEO</span>{{end}}</td>
+<td>{{len .New}} / {{len .Check.Vanished}} / {{len .Check.Retired}}</td><td>{{len .Check.Failures}}</td>{{end}}{{end}}</tr>
+{{end}}
+</table>
+{{end}}
+
+{{define "ignoreBtn"}}<button class="btn small" hx-post="/pg/{{.ID}}/toggle" hx-swap="outerHTML">{{if eq .State "ignored"}}Restore{{else}}Ignore{{end}}</button>{{end}}
+
+{{define "pagesFilter"}}
+<p class="small">Show: <a href="?state=">all ({{len .P.Pages}})</a>{{range .States}} · <a href="?state={{.}}">{{.}} ({{$.P.CountState .}})</a>{{end}}</p>
+{{end}}
+
+{{define "pagesBody"}}
+{{template "pagesFilter" .}}
+<table>
+<tr><th>Page</th><th>State</th><th>Last status</th><th>Last changed</th><th>Snapshots</th><th>First seen</th><th></th></tr>
+{{range .List}}<tr>
+<td><a href="/pg/{{.ID}}">{{.Path}}</a></td><td>{{template "stateBadge" .}}</td>
+<td>{{with .Last}}<span class="{{statusClass .Status}}">{{.Status}}</span>{{end}}</td>
+<td>{{with .LastChanged}}<a href="/d/{{.ID}}">Check #{{.Check.ID}}</a> <span class="muted small">{{ago .Fetched}}</span>{{else}}<span class="muted">never</span>{{end}}</td>
+<td>{{len .Snapshots}}</td><td><span class="muted small">Check #{{.FirstSeen.ID}}</span></td>
+<td>{{if ne .State "excluded"}}{{template "ignoreBtn" .}}{{else}}<span class="muted small">matches exclude pattern</span>{{end}}</td></tr>{{end}}
+</table>
+{{end}}
+
+{{define "settingsBody"}}
+<form class="settings" hx-post="/p/{{.P.ID}}/settings" hx-target="#saved-req">
+<fieldset><legend>Request settings</legend>
+<p class="muted small">Domain <b class="mono">{{.P.Domain}}</b> is fixed at creation. Changes apply from the next Check.</p>
+<label>Schedule</label><select name="schedule">{{range (dict "a" "manual only" "b" "hourly" "c" "daily" "d" "weekly")}}<option {{if eq . $.P.Schedule}}selected{{end}}>{{.}}</option>{{end}}</select>
+<label>User agent</label><input type="text" name="ua" value="{{.P.UA}}" list="uas">
+<datalist id="uas"><option value="SEOSiteChecker/0.1"><option value="Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"><option value="Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/W.X.Y.Z Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"></datalist>
+<label>Custom headers <span class="help">— covers auth and cookies via Authorization / Cookie</span></label>
+<div id="hdrs">{{range .P.Headers}}<div><input type="text" style="width:180px" value="{{.K}}"> <input type="text" style="width:330px" value="{{.V}}"></div>{{end}}
+<div><input type="text" style="width:180px" placeholder="Header-Name"> <input type="text" style="width:330px" placeholder="value"></div></div>
+<label>Timeout <span class="help">seconds, whole fetch, 1–120</span></label><input type="number" min="1" max="120" value="{{.P.Timeout}}" style="width:100px">
+<label>Max parallel requests <span class="help">1–10</span></label><input type="number" min="1" max="10" value="{{.P.MaxPar}}" style="width:100px">
+<label>Exclude patterns <span class="help">one glob per line, matched against path + query; only * and ** are wildcards</span></label>
+<textarea rows="3" name="excl">{{join .P.Excludes "\n"}}</textarea>
+<label><input type="checkbox" {{if .P.Robots}}checked{{end}}> Respect robots.txt</label>
+<p><button class="btn primary">Save Request settings</button></p><div id="saved-req"></div>
+</fieldset>
+</form>
+<form class="settings" hx-post="/p/{{.P.ID}}/noise" hx-target="#saved-noise">
+<fieldset><legend>Noise rules</legend>
+<p class="muted small">Stop known-volatile parts of a response counting as a change. Never applied to SEO fields. Each Check uses the rules as they were when it started.</p>
+<details><summary class="small">Built-in (fixed): {{len .BuiltinHeaders}} headers, nonce + CSRF masks</summary><p class="mono small">{{join .BuiltinHeaders ", "}}<br>nonce="…" · &lt;meta name="csrf-token"&gt; · CSRF-looking hidden inputs</p></details>
+<label>Header names to ignore <span class="help">one per line</span></label><textarea rows="2" name="headers">{{join .P.NoiseHeaders "\n"}}</textarea>
+<label>Body masks <span class="help">Go RE2, one per line, run on the reformatted body; each match becomes ⟨masked⟩. Try an invalid one like <code>(foo</code>.</span></label>
+<textarea rows="3" name="masks">{{join .P.NoiseMasks "\n"}}</textarea>
+<p><button class="btn primary">Save Noise rules</button></p><div id="saved-noise"></div>
+</fieldset>
+</form>
+{{end}}
+
+{{define "historyBody"}}{{/* Page */}}
+<p>{{template "stateBadge" .}} <a href="{{.URL}}" class="mono small">{{.URL}}</a> · first seen in Check #{{.FirstSeen.ID}} {{if ne .State "excluded"}}· {{template "ignoreBtn" .}}{{end}}</p>
+<table>
+<tr><th>Check</th><th>When</th><th>Result</th><th>Diff vs previous Snapshot</th><th></th></tr>
+{{range .History}}<tr>
+<td><a href="/c/{{.Check.ID}}">#{{.Check.ID}}</a></td><td>{{clock .Check.Started}}</td>
+{{if .Fail}}<td><span class="badge t-critical">fetch failure: {{.Fail.Kind}}</span></td><td class="muted small">{{.Fail.Detail}} — not a Snapshot, never a baseline</td><td></td>
+{{else}}{{with .Snap}}<td><span class="{{statusClass .Status}}">{{.Status}}</span> <span class="muted small">{{.TimingMs}}ms · {{.Size}}</span></td>{{end}}
+<td>{{if not .Snap.Prev}}<span class="badge">first Snapshot</span>{{else if .Changed}}{{template "tierBadges" .Changed}}{{else}}<span class="muted">empty</span>{{end}}</td>
+<td><a href="/s/{{.Snap.ID}}">raw</a>{{if .Snap.Prev}} · <a href="/d/{{.Snap.ID}}">diff</a>{{end}}</td>{{end}}
+</tr>{{end}}
+</table>
+{{end}}
+
+{{/* ================= default screens (used by any variant that doesn't override) ================= */}}
+
+{{define "home"}}
+<h1>Projects</h1>
+<table>
+<tr><th>Domain</th><th>Schedule</th><th>Pages</th><th>Last Check</th><th>Last Report</th></tr>
+{{range .Projects}}<tr>
+<td><a href="/p/{{.ID}}"><b>{{.Domain}}</b></a></td><td>{{.Schedule}}</td><td>{{.CountState "active"}} active</td>
+<td>{{with .Running}}<span class="live"></span> <a href="/c/{{.ID}}">running</a>{{else}}{{with .Latest}}{{ago .Started}}{{end}}{{end}}</td>
+<td>{{with .LatestFinished}}{{with .Report}}<a href="/c/{{.Check.ID}}">{{len .Changed}} changed</a>{{if .Critical}} <span class="badge t-critical">{{.Critical}} critical</span>{{end}}{{if .SEO}} <span class="badge t-SEO">{{.SEO}} SEO</span>{{end}}{{if .Check.Failures}} <span class="badge">{{len .Check.Failures}} failed</span>{{end}}{{if .Check.SeedFailed}} <span class="badge t-SEO">seed failed</span>{{end}}{{end}}{{end}}</td>
+</tr>{{end}}
+</table>
+{{template "newProject"}}
+{{end}}
+
+{{define "newProject"}}
+<form hx-post="/projects" hx-target="#np" style="margin-top:16px;display:flex;gap:6px;align-items:center">
+<input type="text" name="domain" placeholder="example.com — one exact host, https only" style="max-width:340px"><button class="btn primary">Add Project</button><span id="np"></span></form>
+{{end}}
+
+{{define "checks"}}<h1>{{.P.Domain}} · Checks</h1>{{template "checksBody" .}}{{end}}
+{{define "pages"}}<h1>{{.P.Domain}} · Page pool</h1>{{template "pagesBody" .}}{{end}}
+{{define "settings"}}<h1>{{.P.Domain}} · Settings</h1>{{template "settingsBody" .}}{{end}}
+{{define "page"}}<h1 class="mono">{{.Pg.Path}}</h1>{{template "historyBody" .Pg}}{{end}}
+
+{{define "check"}}
+<h1>Check #{{.C.ID}} <span class="muted small">{{.C.Trigger}} · started {{clock .C.Started}}{{if ne .C.Status "running"}} · took {{.C.Duration}}{{end}}</span></h1>
+{{if eq .C.Status "running"}}{{template "runBtn" .P}}{{template "progress" .Prog}}<p class="muted">The Report appears when the Check finishes.</p>
+{{else}}{{template "reportBody" (dict "R" .R "Mode" "link")}}{{end}}
+{{end}}
+
+{{define "snapshot"}}
+{{with .S}}
+<h1>Snapshot #{{.ID}} <span class="mono small">{{.Page.Path}}</span></h1>
+<p><span class="{{statusClass .Status}}"><b>{{.Status}}</b></span> · Check <a href="/c/{{.Check.ID}}">#{{.Check.ID}}</a> · {{clock .Fetched}} · {{.TimingMs}}ms · {{.Size}}
+· {{with .Prev}}<a href="/s/{{.ID}}">← previous</a>{{else}}<span class="muted">first Snapshot</span>{{end}}{{with $.Next}} · <a href="/s/{{.ID}}">next →</a>{{end}}
+{{if .Prev}} · <a href="/d/{{.ID}}">Diff vs previous</a>{{end}}</p>
+{{end}}
+<div class="tabs"><a href="?tab=seo" class="{{if eq .Tab "seo"}}on{{end}}">SEO fields</a><a href="?tab=headers" class="{{if eq .Tab "headers"}}on{{end}}">Headers</a><a href="?tab=html" class="{{if eq .Tab "html"}}on{{end}}">Raw HTML</a></div>
+{{if eq .Tab "seo"}}<table>{{range .S.SEOFields}}<tr><th style="width:170px">{{.K}}</th><td>{{if .V}}{{.V}}{{else}}<span class="muted">∅</span>{{end}}</td></tr>{{end}}</table>
+{{else if eq .Tab "headers"}}<table class="mono">{{range .S.Headers}}<tr><th style="width:220px">{{.K}}</th><td>{{.V}}</td></tr>{{end}}</table>
+{{else}}{{if .S.Body}}<pre class="raw">{{.S.Body}}</pre>{{else}}<p class="muted">No body stored (non-HTML response).</p>{{end}}{{end}}
+{{end}}
+
+{{define "diff"}}
+<div class="diffbox">
+{{with .D}}
+<h2 style="margin-top:0">Diff · <a href="/pg/{{.Snap.Page.ID}}" class="mono">{{.Snap.Page.Path}}</a> {{with .Summary}}{{template "tierBadges" .}}{{end}}</h2>
+<p class="small muted">{{with .Prev}}<a href="/s/{{.ID}}">Snapshot #{{.ID}}</a> (Check #{{.Check.ID}}, {{clock .Fetched}}){{end}} → <a href="/s/{{.Snap.ID}}">Snapshot #{{.Snap.ID}}</a> (Check #{{.Snap.Check.ID}}, {{clock .Snap.Fetched}}) · Noise rules as of Check #{{.Snap.Check.ID}}</p>
+{{if not .Prev}}<p>First Snapshot — no Diff.</p>{{else}}
+{{if not .Summary}}<p class="flash">Empty Diff: nothing differs after Noise rules.</p>{{end}}
+<h3>SEO fields</h3>
+{{if .AnySEO}}<table>{{range .Fields}}{{if .Changed}}<tr><th style="width:150px">{{.Name}}</th><td class="diff"><span class="del">{{if .Before}}{{.Before}}{{else}}∅{{end}}</span></td><td class="diff"><span class="add">{{if .After}}{{.After}}{{else}}∅{{end}}</span></td></tr>{{end}}{{end}}</table>
+{{else}}<p class="muted small">No SEO field changed.</p>{{end}}
+<h3>Headers</h3>
+{{if .Headers}}<table class="mono">{{range .Headers}}<tr><td style="width:90px"><span class="badge">{{.Kind}}</span></td><th style="width:200px">{{.Name}}</th><td class="diff"><span class="del">{{.Before}}</span></td><td class="diff"><span class="add">{{.After}}</span></td></tr>{{end}}</table>
+{{else}}<p class="muted small">No header changed.</p>{{end}}
+{{if .NoiseHit}}<p class="small muted">Ignored by Noise rules: {{range .NoiseHit}}<span class="mono">{{.Name}}</span> {{end}}</p>{{end}}
+<h3>Body <span style="text-transform:none;font-weight:400">— reformatted, one tag per line ·
+<a hx-get="/d/{{.Snap.ID}}?diff=split" hx-target="closest .diffbox" hx-swap="outerHTML" href="#">{{if eq $.DiffMode "split"}}<b>side-by-side</b>{{else}}side-by-side{{end}}</a> |
+<a hx-get="/d/{{.Snap.ID}}?diff=unified" hx-target="closest .diffbox" hx-swap="outerHTML" href="#">{{if eq $.DiffMode "unified"}}<b>unified</b>{{else}}unified{{end}}</a></span></h3>
+{{if .BodyNote}}<p><span class="badge t-body">{{.BodyNote}}</span></p>
+{{else if not .Unified}}<p class="muted small">No body change.</p>
+{{else if eq $.DiffMode "unified"}}
+<div class="diff"><table>{{range .Unified}}{{if eq .Op "gap"}}<tr class="gap"><td colspan="4">⋯ {{.Text}} ⋯</td></tr>{{else}}<tr class="{{if eq .Op "+"}}add{{else if eq .Op "-"}}del{{end}}"><td class="n">{{if .A}}{{.A}}{{end}}</td><td class="n">{{if .B}}{{.B}}{{end}}</td><td class="op">{{.Op}}</td><td>{{.Text}}</td></tr>{{end}}{{end}}</table></div>
+{{else}}
+<div class="diff"><table>{{range .Split}}{{if .Gap}}<tr class="gap"><td colspan="4">⋯ {{.Gap}} ⋯</td></tr>{{else}}<tr>
+{{with .L}}<td class="n">{{.A}}</td><td class="{{if eq .Op "-"}}del{{end}}">{{.Text}}</td>{{else}}<td class="n"></td><td></td>{{end}}
+{{with .R}}<td class="n">{{.B}}</td><td class="{{if eq .Op "+"}}add{{end}}">{{.Text}}</td>{{else}}<td class="n"></td><td></td>{{end}}
+</tr>{{end}}{{end}}</table></div>
+{{end}}
+{{end}}
+{{end}}
+</div>
+{{end}}
+
+{{/* ================= Variant A: Pages & tabs ================= */}}
+
+{{define "A/shell"}}<!doctype html><html><head>{{template "head" .}}
+<style>.topbar{background:#1d2330;color:#fff;padding:10px 24px;display:flex;gap:20px;align-items:center}.topbar a{color:#fff}.topbar .brand{font-weight:700}.crumbs{color:#aab3c5}.crumbs a{color:#cfd8ea}.wrap{max-width:1180px;margin:20px auto;padding:0 24px 80px}</style>
+</head><body>
+<header class="topbar"><a href="/" class="brand">SEO Site Checker</a>{{with .Crumbs}}<nav class="crumbs">{{range $i, $c := .}}{{if $i}} › {{end}}{{if $c.Href}}<a href="{{$c.Href}}">{{$c.Label}}</a>{{else}}{{$c.Label}}{{end}}{{end}}</nav>{{end}}</header>
+<main class="wrap">{{.Content}}</main>{{template "switcher" .}}</body></html>{{end}}
+
+{{define "A/tabs"}}
+<h1>{{.P.Domain}} {{with .P.Running}}<span class="live" title="Check running"></span>{{end}}</h1>
+<div class="tabs"><a href="/p/{{.P.ID}}" class="{{if eq .Tab "checks"}}on{{end}}">Checks</a><a href="/p/{{.P.ID}}/pages" class="{{if eq .Tab "pages"}}on{{end}}">Page pool</a><a href="/p/{{.P.ID}}/settings" class="{{if eq .Tab "settings"}}on{{end}}">Settings</a></div>
+{{end}}
+{{define "A/checks"}}{{template "A/tabs" .}}{{template "checksBody" .}}{{end}}
+{{define "A/pages"}}{{template "A/tabs" .}}{{template "pagesBody" .}}{{end}}
+{{define "A/settings"}}{{template "A/tabs" .}}{{template "settingsBody" .}}{{end}}
+
+{{/* ================= Variant B: Sidebar + pane ================= */}}
+
+{{define "B/shell"}}<!doctype html><html><head>{{template "head" .}}
+<style>.app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}.side{background:#151a24;color:#cfd6e4;padding:14px 0}.side a{color:#cfd6e4}
+.side .brand{font-weight:700;color:#fff;padding:0 16px 14px}.side .proj{padding:6px 16px}.side .proj.cur{background:#232a38}.side .proj>a{font-weight:600;color:#fff}
+.side ul{list-style:none;margin:6px 0 2px;padding:0 0 0 10px}.side li{padding:3px 0}.side li a.on{color:#7fb0ff}.side .all{display:block;padding:4px 16px 12px;font-size:12px}
+.mainB{padding:20px 24px 80px;min-width:0}.md{display:grid;grid-template-columns:minmax(360px,42%) 1fr;gap:18px;align-items:start}#pane{position:sticky;top:12px;background:#fff;border:1px solid #e1e4ea;border-radius:8px;padding:14px;max-height:calc(100vh - 24px);overflow:auto;min-height:200px}</style>
+</head><body><div class="app">
+<aside class="side"><div class="brand">SEO Site Checker</div><a class="all" href="/">All projects</a>
+{{range .Projects}}<div class="proj {{if $.Cur}}{{if eq $.Cur.ID .ID}}cur{{end}}{{end}}"><a href="/p/{{.ID}}">{{.Domain}}</a> {{with .Running}}<span class="live"></span>{{end}}
+{{if $.Cur}}{{if eq $.Cur.ID .ID}}<ul>
+<li><a href="/c/{{.Latest.ID}}" class="{{if eq $.Screen "check"}}on{{end}}">{{if .Running}}Live progress{{else}}Latest Report{{end}}</a></li>
+<li><a href="/p/{{.ID}}/checks" class="{{if eq $.Screen "checks"}}on{{end}}">Check history</a></li>
+<li><a href="/p/{{.ID}}/pages" class="{{if eq $.Screen "pages"}}on{{end}}">Page pool ({{.CountState "active"}})</a></li>
+<li><a href="/p/{{.ID}}/settings" class="{{if eq $.Screen "settings"}}on{{end}}">Settings</a></li></ul>{{end}}{{end}}</div>{{end}}
+</aside>
+<main class="mainB">{{.Content}}</main></div>{{template "switcher" .}}</body></html>{{end}}
+
+{{define "B/home"}}
+<h1>All projects</h1>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+{{range .Projects}}<a class="chg" href="/p/{{.ID}}" style="padding:14px"><div class="url">{{.Domain}} {{with .Running}}<span class="live"></span>{{end}}</div>
+<div class="small muted">{{.Schedule}} · {{.CountState "active"}} active Pages</div>
+{{with .LatestFinished}}{{with .Report}}<div style="margin-top:8px">{{len .Changed}} changed{{if .Critical}} <span class="badge t-critical">{{.Critical}} critical</span>{{end}}{{if .SEO}} <span class="badge t-SEO">{{.SEO}} SEO</span>{{end}}{{if .Check.Failures}} <span class="badge">{{len .Check.Failures}} failed</span>{{end}}</div><div class="small muted">Check #{{.Check.ID}} · {{ago .Check.Started}}</div>{{end}}{{end}}
+</a>{{end}}</div>
+{{template "newProject"}}
+{{end}}
+
+{{define "B/check"}}
+{{if eq .C.Status "running"}}{{template "check" .}}{{else}}
+<div class="md"><div>
+<h1>Check #{{.C.ID}} <span class="muted small">{{.C.Trigger}} · {{clock .C.Started}} · {{.C.Duration}}</span></h1>
+<p>{{template "runBtn" .P}} <span class="small">Other Checks: {{range .P.ChecksDesc}}{{if ne .ID $.C.ID}}<a href="/c/{{.ID}}">#{{.ID}}</a> {{end}}{{end}}</span></p>
+{{template "reportBody" (dict "R" .R "Mode" "pane")}}
+</div>
+<div id="pane">{{with .R.Changed}}{{with index . 0}}<div hx-get="/d/{{.Snap.ID}}" hx-trigger="load" hx-swap="outerHTML"><p class="muted">loading first Diff…</p></div>{{end}}{{else}}<p class="muted">No changed Pages to show. Click a Page on the left.</p>{{end}}</div>
+</div>{{end}}
+{{end}}
+
+{{define "B/pages"}}
+<div class="md"><div><h1>Page pool</h1>{{template "pagesFilter" .}}
+{{range .List}}<div class="chg click" hx-get="/pg/{{.ID}}" hx-target="#pane"><span class="url mono">{{.Path}}</span> {{template "stateBadge" .}}
+<span class="small muted">{{with .Last}}<span class="{{statusClass .Status}}">{{.Status}}</span>{{end}} · {{len .Snapshots}} Snapshots{{with .LastChanged}} · changed Check #{{.Check.ID}}{{end}}</span></div>{{end}}
+</div><div id="pane"><p class="muted">Select a Page to see its Snapshot history.</p></div></div>
+{{end}}
+
+{{define "B/page"}}<h2 class="mono" style="margin-top:0">{{.Pg.Path}}</h2>{{template "historyBody" .Pg}}{{end}}
+
+{{/* ================= Variant C: Changes feed ================= */}}
+
+{{define "C/shell"}}<!doctype html><html><head>{{template "head" .}}
+<style>body{background:#fff}.top{border-bottom:1px solid #e6e8ec;padding:10px 0}.top .in,.col{max-width:860px;margin:0 auto;padding:0 20px}.top .in{display:flex;gap:16px;align-items:center}.top .brand{font-weight:800;color:#1d2330}
+.col{padding-top:20px;padding-bottom:90px}.card{border:1px solid #e1e4ea;border-radius:10px;padding:14px 16px;margin:0 0 14px;background:#fff}.card .hd{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.tl{border-left:2px solid #e1e4ea;margin-left:6px;padding-left:18px}.tl .card{position:relative}.tl .card:before{content:"";position:absolute;left:-26px;top:18px;width:12px;height:12px;border-radius:50%;background:#c9ced8;border:2px solid #fff}.tl .card.hot:before{background:#e5484d}
+.inline{margin-top:8px;padding:10px;background:#fafbfc;border-radius:6px}details.chg summary{list-style:none;cursor:pointer}details.chg summary::-webkit-details-marker{display:none}</style>
+</head><body>
+<div class="top"><div class="in"><a href="/" class="brand">SEO Site Checker</a><a href="/">Feed</a>
+<select onchange="location=this.value" style="width:auto"><option value="/">All projects</option>{{range .Projects}}<option value="/p/{{.ID}}" {{if $.Cur}}{{if eq $.Cur.ID .ID}}selected{{end}}{{end}}>{{.Domain}}</option>{{end}}</select>
+{{with .Cur}}<a href="/p/{{.ID}}/pages">Page pool</a><a href="/p/{{.ID}}/settings">Settings</a>{{end}}</div></div>
+<div class="col">{{.Content}}</div>{{template "switcher" .}}</body></html>{{end}}
+
+{{define "C/feedCard"}}{{/* Check */}}
+<div class="card {{if eq .Status "running"}}{{else}}{{with .Report}}{{if .Critical}}hot{{end}}{{end}}{{end}}">
+<div class="hd"><div><a href="/p/{{.Project.ID}}"><b>{{.Project.Domain}}</b></a> · <a href="/c/{{.ID}}">Check #{{.ID}}</a> <span class="muted small">{{.Trigger}} · {{ago .Started}}</span></div>
+<div>{{if eq .Status "cancelled"}}<span class="badge">partial</span>{{end}}{{if .SeedFailed}}<span class="badge t-SEO">seed failed</span>{{end}}</div></div>
+{{if eq .Status "running"}}{{template "progress" .Progress}}
+{{else}}{{with .Report}}
+<div class="small" style="margin:6px 0">{{len .Changed}} changed{{if .Critical}} <span class="badge t-critical">{{.Critical}} critical</span>{{end}}{{if .SEO}} <span class="badge t-SEO">{{.SEO}} SEO</span>{{end}} · {{len .New}} new · {{len .Check.Vanished}} vanished · {{len .Check.Retired}} retired · {{len .Check.Failures}} failed · {{.Unchanged}} unchanged</div>
+{{range $i, $c := .Changed}}{{if lt $i 3}}{{template "changedRow" (dict "R" $c "Mode" "inline")}}{{end}}{{end}}
+{{if gt (len .Changed) 3}}<a href="/c/{{.Check.ID}}" class="small">+ {{len .Changed}} changed in total — open Report →</a>{{else}}<a href="/c/{{.Check.ID}}" class="small">Open Report →</a>{{end}}
+{{end}}{{end}}
+</div>
+{{end}}
+
+{{define "C/home"}}
+<h1>What changed</h1>
+<p class="muted small">Every Check across all Projects, newest first. Expand a Page to see its Diff in place.</p>
+{{range .Feed}}{{template "C/feedCard" .}}{{end}}
+{{template "newProject"}}
+{{end}}
+
+{{define "C/project"}}
+<h1>{{.P.Domain}}</h1>
+<p>{{template "runBtn" .P}} <span class="muted small">{{.P.Schedule}} · {{.P.CountState "active"}} active Pages · <a href="/p/{{.P.ID}}/pages">Page pool</a> · <a href="/p/{{.P.ID}}/settings">Settings</a></span></p>
+<div class="tl">{{range .P.ChecksDesc}}{{template "C/feedCard" .}}{{end}}</div>
+{{end}}
+
+{{define "C/check"}}
+<h1><a href="/p/{{.P.ID}}">{{.P.Domain}}</a> · Check #{{.C.ID}} <span class="muted small">{{.C.Trigger}} · {{clock .C.Started}}</span></h1>
+{{if eq .C.Status "running"}}{{template "progress" .Prog}}{{else}}{{template "reportBody" (dict "R" .R "Mode" "inline")}}{{end}}
+{{end}}
+
+{{define "C/page"}}
+<h1 class="mono">{{.Pg.Path}}</h1>
+<p>{{template "stateBadge" .Pg}} <span class="mono small">{{.Pg.URL}}</span> {{if ne .Pg.State "excluded"}}{{template "ignoreBtn" .Pg}}{{end}}</p>
+<div class="tl">{{range .Pg.History}}
+<div class="card {{with .Changed}}{{if eq .Tier 0}}hot{{end}}{{end}}">
+<div class="hd"><div><a href="/c/{{.Check.ID}}">Check #{{.Check.ID}}</a> <span class="muted small">{{clock .Check.Started}}</span></div>
+<div>{{if .Fail}}<span class="badge t-critical">fetch failure: {{.Fail.Kind}}</span>{{else}}<span class="{{statusClass .Snap.Status}}">{{.Snap.Status}}</span> <a class="small" href="/s/{{.Snap.ID}}">raw</a>{{end}}</div></div>
+{{if .Fail}}<div class="small muted">{{.Fail.Detail}}</div>
+{{else if not .Snap.Prev}}<div class="small muted">First Snapshot.</div>
+{{else if .Changed}}<details hx-get="/d/{{.Snap.ID}}" hx-trigger="toggle once" hx-target="find .inline"><summary>{{template "tierBadges" .Changed}} {{template "fieldChanges" .Changed.Fields}}</summary><div class="inline muted">loading Diff…</div></details>
+{{else}}<div class="small muted">No change.</div>{{end}}
+</div>{{end}}</div>
+{{end}}
