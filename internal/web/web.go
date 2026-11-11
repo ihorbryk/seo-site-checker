@@ -13,7 +13,9 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/project"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 //go:embed templates/*.html
@@ -31,19 +33,21 @@ func ParseTemplates() (*template.Template, error) {
 type crumb struct{ Label, Href string }
 
 type server struct {
-	pool *pgxpool.Pool
-	q    *dbgen.Queries
-	tmpl *template.Template
-	log  *slog.Logger
+	pool  *pgxpool.Pool
+	river *river.Client[pgx.Tx] // insert-only
+	q     *dbgen.Queries
+	tmpl  *template.Template
+	log   *slog.Logger
 }
 
-// New builds the web handler: routes wrapped in the middleware chain.
-func New(pool *pgxpool.Pool, log *slog.Logger) (http.Handler, error) {
+// New builds the web handler: routes wrapped in the middleware chain. rc is an
+// insert-only River client (check.NewInsertClient) used to start Checks.
+func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.Handler, error) {
 	tmpl, err := ParseTemplates()
 	if err != nil {
 		return nil, err
 	}
-	s := &server{pool: pool, q: dbgen.New(pool), tmpl: tmpl, log: log}
+	s := &server{pool: pool, river: rc, q: dbgen.New(pool), tmpl: tmpl, log: log}
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -53,6 +57,10 @@ func New(pool *pgxpool.Pool, log *slog.Logger) (http.Handler, error) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("POST /projects", s.addProject)
+	mux.HandleFunc("GET /p/{id}", s.projectChecks)
+	mux.HandleFunc("POST /p/{id}/checks", s.runCheck)
+	mux.HandleFunc("GET /c/{id}", s.checkPage)
+	mux.HandleFunc("GET /c/{id}/progress", s.checkProgress)
 	return chain(mux, recoverPanics(log), logRequests(log)), nil
 }
 

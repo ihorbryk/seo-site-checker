@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/app"
+	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/config"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,7 +17,11 @@ import (
 
 func main() {
 	app.Run("web", func(ctx context.Context, cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) error {
-		handler, err := web.New(pool, log)
+		rc, err := check.NewInsertClient(pool)
+		if err != nil {
+			return err
+		}
+		handler, err := web.New(pool, rc, log)
 		if err != nil {
 			return err
 		}

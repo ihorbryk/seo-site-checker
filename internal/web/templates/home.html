@@ -3,7 +3,7 @@
 <table>
 <tr><th>Domain</th><th>Schedule</th><th>Pages</th></tr>
 {{range .Projects}}<tr>
-<td><b>{{.Domain}}</b></td><td>{{.Schedule}}</td><td>{{.ActivePages}} active</td>
+<td><a href="/p/{{.ID}}"><b>{{.Domain}}</b></a></td><td>{{.Schedule}}</td><td>{{.ActivePages}} active</td>
 </tr>{{end}}
 </table>
 {{template "newProject"}}

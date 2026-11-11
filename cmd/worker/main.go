@@ -14,7 +14,7 @@ import (
 
 func main() {
 	app.Run("worker", func(ctx context.Context, cfg config.Config, log *slog.Logger, pool *pgxpool.Pool) error {
-		client, err := worker.NewClient(pool, cfg.WorkerConcurrency, log)
+		client, err := worker.NewClient(pool, worker.Options{Concurrency: cfg.WorkerConcurrency, Log: log})
 		if err != nil {
 			return err
 		}

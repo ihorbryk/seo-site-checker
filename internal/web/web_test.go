@@ -10,13 +10,19 @@ import (
 	"testing"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
 )
 
 func newServer(t *testing.T) http.Handler {
 	t.Helper()
-	h, err := web.New(testdb.New(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pool := testdb.New(t)
+	rc, err := check.NewInsertClient(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := web.New(pool, rc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +61,7 @@ func TestEveryTemplateParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"shell", "home", "newProject"} {
+	for _, name := range []string{"shell", "home", "newProject", "project", "progress", "checkRunning", "report"} {
 		if tmpl.Lookup(name) == nil {
 			t.Errorf("template %q is not defined", name)
 		}

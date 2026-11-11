@@ -97,3 +97,25 @@ func TestFaultHooks(t *testing.T) {
 		t.Errorf("oversized body: %d bytes, err %v", len(body), err)
 	}
 }
+
+func TestNetworkReachesEveryAddedSiteEvenAfterTheClientIsBuilt(t *testing.T) {
+	n := fakesite.NewNetwork()
+	c := n.Client()
+	a := fakesite.New(t, "a.test")
+	b := fakesite.New(t, "b.test")
+	a.Set("/", fakesite.Response{Body: "A"})
+	b.Set("/", fakesite.Response{Body: "B"})
+	n.Add(a)
+	n.Add(b)
+
+	for url, want := range map[string]string{"https://a.test/": "A", "https://b.test/": "B"} {
+		if _, body, err := get(t, c, url); err != nil || body != want {
+			t.Errorf("%s: %q %v", url, body, err)
+		}
+	}
+	_, _, err := get(t, c, "https://c.test/")
+	var dnsErr *net.DNSError
+	if !errors.As(err, &dnsErr) {
+		t.Errorf("unknown host: want a DNS error, got %v", err)
+	}
+}

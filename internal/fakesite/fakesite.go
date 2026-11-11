@@ -93,27 +93,62 @@ func (s *Site) Hits(path string) int {
 	return s.hits[path]
 }
 
-// Client returns an *http.Client for the system under test: it reaches the
-// fake host (trusting the server's certificate), fails DNS for every other
-// host, and never follows redirects.
+// Host is the fake host the site answers for.
+func (s *Site) Host() string { return s.host }
+
+// Client returns an *http.Client for the system under test that reaches only
+// this site; see Network for several.
 func (s *Site) Client() *http.Client {
-	pool := x509.NewCertPool()
-	pool.AddCert(s.server.Certificate())
-	addr := s.server.Listener.Addr().String()
+	n := NewNetwork()
+	n.Add(s)
+	return n.Client()
+}
+
+// Network is the fake internet the system under test sees: the hosts of the
+// sites added to it, and nothing else.
+type Network struct {
+	mu    sync.Mutex
+	sites map[string]*Site
+}
+
+// NewNetwork returns an empty Network.
+func NewNetwork() *Network { return &Network{sites: map[string]*Site{}} }
+
+// Add makes site reachable at its host. Sites may be added while clients are in use.
+func (n *Network) Add(site *Site) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.sites[site.host] = site
+}
+
+// Client returns an *http.Client that dials the added sites over TLS
+// (trusting each server's certificate), fails DNS for every other host, and
+// never follows redirects.
+func (n *Network) Client() *http.Client {
 	dialer := &net.Dialer{}
 	return &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: pool,
-				// httptest's certificate is issued for example.com.
-				ServerName: "example.com",
-			},
-			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			DialTLSContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 				host, _, err := net.SplitHostPort(address)
-				if err != nil || host != s.host {
+				n.mu.Lock()
+				site := n.sites[host]
+				n.mu.Unlock()
+				if err != nil || site == nil {
 					return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 				}
-				return dialer.DialContext(ctx, network, addr)
+				raw, err := dialer.DialContext(ctx, network, site.server.Listener.Addr().String())
+				if err != nil {
+					return nil, err
+				}
+				roots := x509.NewCertPool()
+				roots.AddCert(site.server.Certificate())
+				// httptest's certificate is issued for example.com.
+				conn := tls.Client(raw, &tls.Config{RootCAs: roots, ServerName: "example.com"})
+				if err := conn.HandshakeContext(ctx); err != nil {
+					_ = raw.Close()
+					return nil, err
+				}
+				return conn, nil
 			},
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

@@ -1,34 +1,66 @@
-// Package worker builds the River client that processes jobs. It has no real
-// job kinds yet; a no-op one keeps River's client configuration valid.
+// Package worker builds the River client that runs Checks: StartCheck, the
+// lanes that perform Fetches, and FinalizeCheck (ADR 0003). All network
+// access goes through the injected *http.Client.
 package worker
 
 import (
-	"context"
 	"log/slog"
+	"net/http"
+	"time"
 
+	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// NoopArgs is a job that does nothing.
-type NoopArgs struct{}
+// Options configures the worker's River client.
+type Options struct {
+	// Concurrency is the number of jobs worked at once (WORKER_CONCURRENCY).
+	Concurrency int
+	Log         *slog.Logger
+	// HTTPClient performs every Fetch; it must not follow redirects. Defaults
+	// to NewHTTPClient().
+	HTTPClient *http.Client
+	// FetchPollInterval overrides River's job polling interval (tests lower it).
+	FetchPollInterval time.Duration
+}
 
-func (NoopArgs) Kind() string { return "noop" }
+type deps struct {
+	pool   *pgxpool.Pool
+	q      *dbgen.Queries
+	client *http.Client
+	log    *slog.Logger
+}
 
-type noopWorker struct{ river.WorkerDefaults[NoopArgs] }
+// NewClient returns a River client working the default queue. The caller
+// starts and stops it.
+func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) {
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = NewHTTPClient()
+	}
+	if opts.Log == nil {
+		opts.Log = slog.Default()
+	}
+	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log}
 
-func (noopWorker) Work(context.Context, *river.Job[NoopArgs]) error { return nil }
-
-// NewClient returns a River client working the default queue with up to
-// concurrency jobs at once. The caller starts and stops it.
-func NewClient(pool *pgxpool.Pool, concurrency int, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &noopWorker{})
+	river.AddWorker(workers, &startWorker{deps: d})
+	river.AddWorker(workers, &laneWorker{deps: d})
+	river.AddWorker(workers, &finalizeWorker{deps: d})
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: concurrency}},
+		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: opts.Concurrency}},
 		Workers: workers,
-		Logger:  log,
+		Logger:  opts.Log,
+		// ADR 0003: above the lane timeout (fetch timeout + 30 s).
+		RescueStuckJobsAfter: 5 * time.Minute,
+		FetchPollInterval:    opts.FetchPollInterval,
+		FetchCooldown:        opts.FetchPollInterval,
 	})
+}
+
+// laneTimeout is a lane's River job timeout.
+func laneTimeout(fetchTimeoutS int) time.Duration {
+	return time.Duration(fetchTimeoutS)*time.Second + 30*time.Second
 }
