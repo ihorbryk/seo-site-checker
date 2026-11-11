@@ -253,3 +253,11 @@ func (s *System) WaitForCheck(id int64) *goquery.Document {
 		time.Sleep(25 * time.Millisecond)
 	}
 }
+
+// Cancel presses Cancel on the Check's page.
+func (s *System) Cancel(checkID int64) {
+	s.T.Helper()
+	if w := s.Post("/c/"+itoa(checkID)+"/cancel", url.Values{}); w.Code != 200 {
+		s.T.Fatalf("cancel Check %d: status %d: %s", checkID, w.Code, w.Body.String())
+	}
+}

@@ -56,6 +56,7 @@ type checkRow struct {
 	Fetched  int64
 	Known    int64
 	Failures int64
+	Partial  bool
 }
 
 func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +81,7 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		checks = append(checks, checkRow{
 			ID: c.ID, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
 			Started: formatTime(c.StartedAt.Time, c.StartedAt.Valid), Duration: duration(c.StartedAt, c.FinishedAt),
-			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures,
+			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures, Partial: c.State == check.StateCancelled,
 		})
 	}
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
@@ -104,6 +105,24 @@ func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	// With a Check already active, show its progress instead of a second one.
 	redirect(w, r, fmt.Sprintf("/c/%d", c.ID))
+}
+
+// cancelCheck asks a queued or running Check to stop. Cancelling a Check that
+// is not active does nothing.
+func (s *server) cancelCheck(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.idParam(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.q.GetCheck(r.Context(), id); err != nil {
+		s.notFoundOr(w, r, err)
+		return
+	}
+	if _, err := s.q.RequestCancel(r.Context(), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	redirect(w, r, fmt.Sprintf("/c/%d", id))
 }
 
 func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
