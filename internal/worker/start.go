@@ -9,6 +9,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
 	"github.com/ihorbryk/seo-site-checker/internal/exclude"
+	projectrules "github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -80,7 +81,11 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 			return err
 		}
 	}
-	rawRules, err := diff.BuiltinRules().JSON() // per-Project Noise rules join these later
+	own, err := projectrules.LoadNoiseRules(ctx, q, c.ProjectID)
+	if err != nil {
+		return err
+	}
+	rawRules, err := append(diff.BuiltinRules(), own.Rules()...).JSON()
 	if err != nil {
 		return err
 	}

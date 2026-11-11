@@ -128,6 +128,14 @@ type Link struct {
 	Source       string
 }
 
+type NoiseRule struct {
+	ID        int64
+	ProjectID int64
+	Kind      string
+	Value     string
+	Position  int32
+}
+
 type Page struct {
 	ID           int64
 	ProjectID    int64

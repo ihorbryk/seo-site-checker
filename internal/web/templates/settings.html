@@ -39,4 +39,20 @@
 <div id="saved-req">{{template "settingsResult" .}}</div>
 </fieldset>
 </form>
+<form id="noise-rules" class="settings" method="post" action="/p/{{.Project.ID}}/settings/noise" hx-post="/p/{{.Project.ID}}/settings/noise" hx-target="#saved-noise">
+<fieldset><legend>Noise rules</legend>
+<p class="muted small">Stop known-volatile parts of a response from counting as a change. They never apply to SEO fields. Changes apply from the next Check; a running Check keeps the rules it started with.</p>
+<details id="builtin-rules"><summary>Built-in rules (always on, read-only)</summary>
+<p class="small">Headers: {{range .Builtin}}{{if eq .Kind "header"}}<code>{{.Value}}</code> {{end}}{{end}}</p>
+<p class="small">Body masks:</p><ul class="small">{{range .Builtin}}{{if eq .Kind "body_mask"}}<li><code>{{.Value}}</code></li>{{end}}{{end}}</ul>
+</details>
+<label>Headers to ignore <span class="muted small">one name per line, case-insensitive</span></label>
+<textarea name="header_names" rows="3" placeholder="X-Build-Id">{{.N.HeaderNames}}</textarea>
+<label>Body masks <span class="muted small">one RE2 regular expression per line; each match in the reformatted HTML is replaced before comparing</span></label>
+<textarea name="body_masks" rows="3" placeholder="Rendered at \d\d:\d\d">{{.N.BodyMasks}}</textarea>
+<p><button class="btn primary">Save Noise rules</button></p>
+<div id="saved-noise">{{if .NoiseErrors}}<div class="flash err">{{range .NoiseErrors}}{{.}}
+{{end}}</div>{{end}}</div>
+</fieldset>
+</form>
 {{end}}

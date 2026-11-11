@@ -18,7 +18,7 @@
 <p id="diff-meta" class="muted">
 <a href="/s/{{.Before.ID}}">Snapshot #{{.Before.ID}}</a> (<a href="/c/{{.Before.CheckID}}">Check #{{.Before.CheckID}}</a>, {{.BeforeFetched}})
 → <a href="/s/{{.After.ID}}">Snapshot #{{.After.ID}}</a> (<a href="/c/{{.After.CheckID}}">Check #{{.After.CheckID}}</a>, {{.AfterFetched}})
-<span id="noise-source"></span>
+<span id="noise-source">Noise rules as of <a href="/c/{{.NoiseCheckID}}">Check #{{.NoiseCheckID}}</a></span>
 </p>
 {{if .Empty}}<p id="empty-diff" class="flash">Empty Diff — nothing differs once Noise rules are applied.</p>{{end}}
 
