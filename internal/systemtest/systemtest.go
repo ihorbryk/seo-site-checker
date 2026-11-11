@@ -24,6 +24,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/fakesite"
 	"github.com/ihorbryk/seo-site-checker/internal/project"
+	"github.com/ihorbryk/seo-site-checker/internal/scheduler"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
 	"github.com/ihorbryk/seo-site-checker/internal/worker"
@@ -43,6 +44,7 @@ type System struct {
 	Web     http.Handler
 	Worker  *river.Client[pgx.Tx]
 	Network *fakesite.Network
+	insert  *river.Client[pgx.Tx] // the insert-only client web and the scheduler share
 }
 
 // New starts the system; everything stops when the test ends. The worker
@@ -57,6 +59,7 @@ func New(t testing.TB) *System {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.insert = insert
 	if s.Web, err = web.New(pool, insert, log); err != nil {
 		t.Fatal(err)
 	}
@@ -161,6 +164,30 @@ func (s *System) Page(w *httptest.ResponseRecorder) *goquery.Document {
 		s.T.Fatal(err)
 	}
 	return d
+}
+
+// Tick runs the scheduler once at the explicit now and returns the ids of the
+// Checks it started (queued; the worker picks them up).
+func (s *System) Tick(now time.Time) []int64 {
+	s.T.Helper()
+	ctx := context.Background()
+	var before int64
+	if err := s.Pool.QueryRow(ctx, `SELECT COALESCE(max(id), 0) FROM checks`).Scan(&before); err != nil {
+		s.T.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := scheduler.Tick(ctx, s.Pool, s.insert, now, log); err != nil {
+		s.T.Fatal(err)
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT id FROM checks WHERE id > $1 ORDER BY id`, before)
+	if err != nil {
+		s.T.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		s.T.Fatal(err)
+	}
+	return ids
 }
 
 // RunCheck presses Run Check on the Project's Checks tab and returns the id of
