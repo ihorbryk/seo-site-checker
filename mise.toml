@@ -29,6 +29,7 @@ options.database = "seo_checker"
 
 [daemons.web]
 run = "exec go run ./cmd/web"
+port = 8089
 ready_port = 8089
 depends = ["postgres"]
 watch = ["**/*.go", "**/*.sql", "**/*.html", "go.mod"]
