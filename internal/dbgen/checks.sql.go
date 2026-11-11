@@ -72,10 +72,10 @@ func (q *Queries) CountDroppedURLs(ctx context.Context, checkID int64) (int64, e
 
 const countOrphans = `-- name: CountOrphans :many
 UPDATE pages pg
-SET orphan_streak = pg.orphan_streak + 1,
-    state = CASE WHEN pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
-WHERE pg.state = 'active' AND pg.origin = 'discovered'
-  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = $1 AND f.page_id = pg.id)
+SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
+    state = CASE WHEN pg.origin = 'discovered' AND pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
+WHERE pg.state = 'active' AND pg.origin IN ('discovered', 'manual')
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = $1 AND f.page_id = pg.id AND f.outcome <> 'failure')
   AND NOT EXISTS (
       SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
       WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id)
@@ -94,9 +94,11 @@ type CountOrphansRow struct {
 	OrphanStreak int32
 }
 
-// Orphaned Pages (discovered, active, fetched in the Check, linked by no other
-// Page's Snapshot) get their streak raised; the third orphaned Check retires
-// the Page. Returns each orphaned Page's new streak.
+// Orphaned Pages (discovered or manual, active, fetched in the Check without a
+// Fetch failure, linked by no other Page's Snapshot) get their streak raised;
+// the third orphaned Check retires a discovered Page. A manual Page's streak
+// stops at 2: it vanishes but is never retired. The seed Page is never
+// counted. Returns each orphaned Page's new streak.
 func (q *Queries) CountOrphans(ctx context.Context, checkID int64) ([]CountOrphansRow, error) {
 	rows, err := q.db.Query(ctx, countOrphans, checkID)
 	if err != nil {
@@ -411,6 +413,22 @@ func (q *Queries) InsertLinks(ctx context.Context, arg InsertLinksParams) error 
 	return err
 }
 
+const insertNewPageEvents = `-- name: InsertNewPageEvents :exec
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT $1, s.page_id, 'new'
+FROM snapshots s JOIN pages pg ON pg.id = s.page_id
+WHERE s.check_id = $1 AND pg.origin <> 'seed'
+  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = s.page_id AND o.check_id < s.check_id)
+ON CONFLICT DO NOTHING
+`
+
+// `new`: a Page that got its first Snapshot in this Check (the seed Page is
+// the Project's starting point, not a find).
+func (q *Queries) InsertNewPageEvents(ctx context.Context, checkID int64) error {
+	_, err := q.db.Exec(ctx, insertNewPageEvents, checkID)
+	return err
+}
+
 const insertPageEvents = `-- name: InsertPageEvents :exec
 INSERT INTO page_events (check_id, page_id, kind)
 SELECT $1, p, $2 FROM unnest($3::bigint[]) AS p
@@ -425,6 +443,18 @@ type InsertPageEventsParams struct {
 
 func (q *Queries) InsertPageEvents(ctx context.Context, arg InsertPageEventsParams) error {
 	_, err := q.db.Exec(ctx, insertPageEvents, arg.CheckID, arg.Kind, arg.PageIds)
+	return err
+}
+
+const insertReactivatedPageEvents = `-- name: InsertReactivatedPageEvents :exec
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT $1, pg.id, 'reactivated' FROM pages pg
+WHERE pg.reactivated_check_id = $1
+ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) InsertReactivatedPageEvents(ctx context.Context, checkID int64) error {
+	_, err := q.db.Exec(ctx, insertReactivatedPageEvents, checkID)
 	return err
 }
 
@@ -876,32 +906,22 @@ func (q *Queries) PlanFetches(ctx context.Context, arg PlanFetchesParams) (int64
 	return result.RowsAffected(), nil
 }
 
-const reactivateLinkedPages = `-- name: ReactivateLinkedPages :many
-UPDATE pages SET state = 'active', orphan_streak = 0
-WHERE id = ANY($1::bigint[]) AND state = 'retired'
-RETURNING id
+const reactivateLinkedPages = `-- name: ReactivateLinkedPages :exec
+UPDATE pages SET state = 'active', orphan_streak = 0, reactivated_check_id = $1
+WHERE id = ANY($2::bigint[]) AND state = 'retired'
 `
 
+type ReactivateLinkedPagesParams struct {
+	CheckID pgtype.Int8
+	PageIds []int64
+}
+
 // Brings retired Pages that a Snapshot linked to back into the pool, with a
-// fresh orphan streak; returns the ones it reactivated.
-func (q *Queries) ReactivateLinkedPages(ctx context.Context, pageIds []int64) ([]int64, error) {
-	rows, err := q.db.Query(ctx, reactivateLinkedPages, pageIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// fresh orphan streak, and remembers the Check; FinalizeCheck records the
+// `reactivated` events.
+func (q *Queries) ReactivateLinkedPages(ctx context.Context, arg ReactivateLinkedPagesParams) error {
+	_, err := q.db.Exec(ctx, reactivateLinkedPages, arg.CheckID, arg.PageIds)
+	return err
 }
 
 const requestCancel = `-- name: RequestCancel :execrows
@@ -1047,11 +1067,10 @@ func (q *Queries) SkipPendingFetches(ctx context.Context, checkID int64) error {
 	return err
 }
 
-const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :many
+const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :exec
 INSERT INTO pages (project_id, url, origin)
 SELECT $1, u, 'discovered' FROM unnest($2::text[]) AS u
 ON CONFLICT (project_id, url) DO NOTHING
-RETURNING id, url
 `
 
 type UpsertDiscoveredPagesParams struct {
@@ -1059,28 +1078,8 @@ type UpsertDiscoveredPagesParams struct {
 	Urls      []string
 }
 
-type UpsertDiscoveredPagesRow struct {
-	ID  int64
-	Url string
-}
-
-// Adds the URLs as discovered Pages of the Project; returns the ones that were new.
-func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) ([]UpsertDiscoveredPagesRow, error) {
-	rows, err := q.db.Query(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []UpsertDiscoveredPagesRow
-	for rows.Next() {
-		var i UpsertDiscoveredPagesRow
-		if err := rows.Scan(&i.ID, &i.Url); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
+func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) error {
+	_, err := q.db.Exec(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls)
+	return err
 }

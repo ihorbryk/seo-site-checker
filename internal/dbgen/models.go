@@ -137,13 +137,14 @@ type NoiseRule struct {
 }
 
 type Page struct {
-	ID           int64
-	ProjectID    int64
-	Url          string
-	State        string
-	Origin       string
-	OrphanStreak int32
-	CreatedAt    time.Time
+	ID                 int64
+	ProjectID          int64
+	Url                string
+	State              string
+	Origin             string
+	OrphanStreak       int32
+	CreatedAt          time.Time
+	ReactivatedCheckID pgtype.Int8
 }
 
 type PageEvent struct {

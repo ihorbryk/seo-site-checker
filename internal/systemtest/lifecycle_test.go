@@ -169,14 +169,17 @@ func TestFetchFailuresAndSeedAndManualPagesNeverRetire(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		s.WaitForCheck(s.RunCheck(p))
 	}
-	rows := poolRows(t, s, p)
-	for _, r := range rows {
-		if strings.Contains(r, "|retired|") && !strings.HasPrefix(r, "https://shop.test/a|") {
-			t.Errorf("seed or manual Page retired: %q", r)
+	for _, r := range poolRows(t, s, p) {
+		if strings.Contains(r, "|retired|") {
+			t.Errorf("a Page retired: %q (failures, seed and manual Pages never retire)", r)
 		}
 	}
-	// /a is orphaned (no links) even though its Fetch fails: only its links decide.
-	if n := count(t, s, `SELECT count(*) FROM pages WHERE origin <> 'discovered' AND (state <> 'active' OR orphan_streak > 0)`); n != 0 {
-		t.Errorf("%d seed/manual Pages orphan-counted", n)
+	// The seed Page is never orphan-counted; a manual one vanishes but its
+	// streak stops short of retiring.
+	if n := count(t, s, `SELECT count(*) FROM pages WHERE origin = 'seed' AND orphan_streak > 0`); n != 0 {
+		t.Errorf("%d seed Pages orphan-counted", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM pages WHERE origin = 'manual' AND (state <> 'active' OR orphan_streak >= 3)`); n != 0 {
+		t.Errorf("%d manual Pages retired", n)
 	}
 }

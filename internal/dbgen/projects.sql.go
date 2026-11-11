@@ -12,7 +12,7 @@ import (
 const createPage = `-- name: CreatePage :one
 INSERT INTO pages (project_id, url, origin)
 VALUES ($1, $2, $3)
-RETURNING id, project_id, url, state, origin, orphan_streak, created_at
+RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id
 `
 
 type CreatePageParams struct {
@@ -32,6 +32,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 		&i.Origin,
 		&i.OrphanStreak,
 		&i.CreatedAt,
+		&i.ReactivatedCheckID,
 	)
 	return i, err
 }
@@ -88,7 +89,7 @@ func (q *Queries) GetProjectByDomain(ctx context.Context, domain string) (Projec
 }
 
 const listPagesByProject = `-- name: ListPagesByProject :many
-SELECT id, project_id, url, state, origin, orphan_streak, created_at FROM pages WHERE project_id = $1 ORDER BY url
+SELECT id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id FROM pages WHERE project_id = $1 ORDER BY url
 `
 
 func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Page, error) {
@@ -108,6 +109,7 @@ func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Pa
 			&i.Origin,
 			&i.OrphanStreak,
 			&i.CreatedAt,
+			&i.ReactivatedCheckID,
 		); err != nil {
 			return nil, err
 		}

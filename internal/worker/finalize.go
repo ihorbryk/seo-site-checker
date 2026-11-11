@@ -15,8 +15,10 @@ type finalizeWorker struct {
 	*deps
 }
 
-// Work records which Pages were orphaned, vanished or retired, caches the Report counts and marks the Check finished, or cancelled when the user asked for that. Repeating it on
-// a Check that has ended does nothing.
+// Work records the Check's page events (the only place they are written),
+// updates orphan streaks, caches the Report counts and marks the Check
+// finished, or cancelled when the user asked for that. Repeating it on a
+// Check that has ended does nothing.
 func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.FinalizeCheckArgs]) error {
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
@@ -48,6 +50,9 @@ func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.Finalize
 	default:
 		return nil
 	}
+	if err := recordNewPages(ctx, q, c.ID); err != nil {
+		return err
+	}
 	if err := q.FinishCheck(ctx, dbgen.FinishCheckParams{ID: c.ID, State: end}); err != nil {
 		return err
 	}
@@ -55,6 +60,16 @@ func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.Finalize
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// recordNewPages records the `new` events (Pages whose first Snapshot is in
+// this Check) and the `reactivated` ones. Both are recorded for a cancelled
+// Check too. Repeating it is harmless.
+func recordNewPages(ctx context.Context, q *dbgen.Queries, checkID int64) error {
+	if err := q.InsertNewPageEvents(ctx, checkID); err != nil {
+		return err
+	}
+	return q.InsertReactivatedPageEvents(ctx, checkID)
 }
 
 // countOrphans updates the orphan streaks and records vanished and retired

@@ -299,11 +299,7 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 		for _, l := range found.Links {
 			urls = append(urls, l.URL)
 		}
-		added, err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls})
-		if err != nil {
-			return err
-		}
-		if err := recordNewPages(ctx, q, chk.ID, added); err != nil {
+		if err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
 			return err
 		}
 		pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})
@@ -345,27 +341,10 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 	return nil
 }
 
-// recordNewPages records a `new` event for each Page this Check's discovery
-// added. Repeating it is harmless.
-func recordNewPages(ctx context.Context, q *dbgen.Queries, checkID int64, added []dbgen.UpsertDiscoveredPagesRow) error {
-	if len(added) == 0 {
-		return nil
-	}
-	ids := make([]int64, len(added))
-	for i, a := range added {
-		ids[i] = a.ID
-	}
-	return q.InsertPageEvents(ctx, dbgen.InsertPageEventsParams{CheckID: checkID, Kind: "new", PageIds: ids})
-}
-
-// reactivate brings retired Pages that were linked again back into the pool
-// and records a `reactivated` event, before their Fetches are planned.
+// reactivate brings retired Pages that were linked again back into the pool,
+// before their Fetches are planned. FinalizeCheck records the events.
 func reactivate(ctx context.Context, q *dbgen.Queries, checkID int64, pageIDs []int64) error {
-	ids, err := q.ReactivateLinkedPages(ctx, pageIDs)
-	if err != nil || len(ids) == 0 {
-		return err
-	}
-	return q.InsertPageEvents(ctx, dbgen.InsertPageEventsParams{CheckID: checkID, Kind: "reactivated", PageIds: ids})
+	return q.ReactivateLinkedPages(ctx, dbgen.ReactivateLinkedPagesParams{CheckID: pgtype.Int8{Int64: checkID, Valid: true}, PageIds: pageIDs})
 }
 
 // storeDiff writes the Diff summary of a new Snapshot against the Page's

@@ -20,7 +20,7 @@ ON CONFLICT (project_id, url) DO UPDATE SET
     state = 'active',
     orphan_streak = 0
 WHERE pages.state <> 'ignored'
-RETURNING id, project_id, url, state, origin, orphan_streak, created_at
+RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id
 `
 
 type AddManualPageParams struct {
@@ -42,28 +42,30 @@ func (q *Queries) AddManualPage(ctx context.Context, arg AddManualPageParams) (P
 		&i.Origin,
 		&i.OrphanStreak,
 		&i.CreatedAt,
+		&i.ReactivatedCheckID,
 	)
 	return i, err
 }
 
 const getPage = `-- name: GetPage :one
-SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pr.domain, pr.exclude_patterns,
+SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pg.reactivated_check_id, pr.domain, pr.exclude_patterns,
     COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
 FROM pages pg JOIN projects pr ON pr.id = pg.project_id
 WHERE pg.id = $1
 `
 
 type GetPageRow struct {
-	ID              int64
-	ProjectID       int64
-	Url             string
-	State           string
-	Origin          string
-	OrphanStreak    int32
-	CreatedAt       time.Time
-	Domain          string
-	ExcludePatterns []string
-	FirstCheckID    int64
+	ID                 int64
+	ProjectID          int64
+	Url                string
+	State              string
+	Origin             string
+	OrphanStreak       int32
+	CreatedAt          time.Time
+	ReactivatedCheckID pgtype.Int8
+	Domain             string
+	ExcludePatterns    []string
+	FirstCheckID       int64
 }
 
 func (q *Queries) GetPage(ctx context.Context, id int64) (GetPageRow, error) {
@@ -77,6 +79,7 @@ func (q *Queries) GetPage(ctx context.Context, id int64) (GetPageRow, error) {
 		&i.Origin,
 		&i.OrphanStreak,
 		&i.CreatedAt,
+		&i.ReactivatedCheckID,
 		&i.Domain,
 		&i.ExcludePatterns,
 		&i.FirstCheckID,

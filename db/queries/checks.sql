@@ -125,12 +125,11 @@ SELECT c.*,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
 FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC;
 
--- name: UpsertDiscoveredPages :many
--- Adds the URLs as discovered Pages of the Project; returns the ones that were new.
+-- name: UpsertDiscoveredPages :exec
+-- Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
 INSERT INTO pages (project_id, url, origin)
 SELECT sqlc.arg(project_id), u, 'discovered' FROM unnest(sqlc.arg(urls)::text[]) AS u
-ON CONFLICT (project_id, url) DO NOTHING
-RETURNING id, url;
+ON CONFLICT (project_id, url) DO NOTHING;
 
 -- name: PageIDsByURL :many
 SELECT id, url, state FROM pages
@@ -163,16 +162,32 @@ SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending';
 -- URLs the Check dropped under the sanity limits.
 SELECT count(*)::bigint FROM dropped_urls WHERE check_id = $1;
 
--- name: ReactivateLinkedPages :many
+-- name: ReactivateLinkedPages :exec
 -- Brings retired Pages that a Snapshot linked to back into the pool, with a
--- fresh orphan streak; returns the ones it reactivated.
-UPDATE pages SET state = 'active', orphan_streak = 0
-WHERE id = ANY(sqlc.arg(page_ids)::bigint[]) AND state = 'retired'
-RETURNING id;
+-- fresh orphan streak, and remembers the Check; FinalizeCheck records the
+-- `reactivated` events.
+UPDATE pages SET state = 'active', orphan_streak = 0, reactivated_check_id = sqlc.arg(check_id)
+WHERE id = ANY(sqlc.arg(page_ids)::bigint[]) AND state = 'retired';
 
 -- name: InsertPageEvents :exec
 INSERT INTO page_events (check_id, page_id, kind)
 SELECT sqlc.arg(check_id), p, sqlc.arg(kind) FROM unnest(sqlc.arg(page_ids)::bigint[]) AS p
+ON CONFLICT DO NOTHING;
+
+-- name: InsertNewPageEvents :exec
+-- `new`: a Page that got its first Snapshot in this Check (the seed Page is
+-- the Project's starting point, not a find).
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT sqlc.arg(check_id), s.page_id, 'new'
+FROM snapshots s JOIN pages pg ON pg.id = s.page_id
+WHERE s.check_id = sqlc.arg(check_id) AND pg.origin <> 'seed'
+  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = s.page_id AND o.check_id < s.check_id)
+ON CONFLICT DO NOTHING;
+
+-- name: InsertReactivatedPageEvents :exec
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT sqlc.arg(check_id), pg.id, 'reactivated' FROM pages pg
+WHERE pg.reactivated_check_id = sqlc.arg(check_id)
 ON CONFLICT DO NOTHING;
 
 -- name: SeedFetchOutcome :one
@@ -201,14 +216,16 @@ WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND (
           AND sf.page_id <> pg.id AND l.target_page_id = pg.id));
 
 -- name: CountOrphans :many
--- Orphaned Pages (discovered, active, fetched in the Check, linked by no other
--- Page's Snapshot) get their streak raised; the third orphaned Check retires
--- the Page. Returns each orphaned Page's new streak.
+-- Orphaned Pages (discovered or manual, active, fetched in the Check without a
+-- Fetch failure, linked by no other Page's Snapshot) get their streak raised;
+-- the third orphaned Check retires a discovered Page. A manual Page's streak
+-- stops at 2: it vanishes but is never retired. The seed Page is never
+-- counted. Returns each orphaned Page's new streak.
 UPDATE pages pg
-SET orphan_streak = pg.orphan_streak + 1,
-    state = CASE WHEN pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
-WHERE pg.state = 'active' AND pg.origin = 'discovered'
-  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = pg.id)
+SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
+    state = CASE WHEN pg.origin = 'discovered' AND pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
+WHERE pg.state = 'active' AND pg.origin IN ('discovered', 'manual')
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = pg.id AND f.outcome <> 'failure')
   AND NOT EXISTS (
       SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
       WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
