@@ -146,14 +146,63 @@ ON CONFLICT DO NOTHING;
 -- name: CountPendingFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending';
 
--- name: CheckDiscovery :one
--- Pages discovered during the Check and URLs it dropped.
-SELECT
-    (SELECT count(*) FROM pages pg
-     WHERE pg.project_id = c.project_id AND pg.origin = 'discovered'
-       AND c.started_at IS NOT NULL AND pg.created_at >= c.started_at)::bigint AS new_pages,
-    (SELECT count(*) FROM dropped_urls d WHERE d.check_id = c.id)::bigint AS dropped
-FROM checks c WHERE c.id = $1;
+-- name: CountDroppedURLs :one
+-- URLs the Check dropped under the sanity limits.
+SELECT count(*)::bigint FROM dropped_urls WHERE check_id = $1;
+
+-- name: ReactivateLinkedPages :many
+-- Brings retired Pages that a Snapshot linked to back into the pool, with a
+-- fresh orphan streak; returns the ones it reactivated.
+UPDATE pages SET state = 'active', orphan_streak = 0
+WHERE id = ANY(sqlc.arg(page_ids)::bigint[]) AND state = 'retired'
+RETURNING id;
+
+-- name: InsertPageEvents :exec
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT sqlc.arg(check_id), p, sqlc.arg(kind) FROM unnest(sqlc.arg(page_ids)::bigint[]) AS p
+ON CONFLICT DO NOTHING;
+
+-- name: SeedFetchOutcome :one
+-- The outcome of the seed Page's Fetch in the Check; NULL until it is done.
+SELECT f.outcome FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = $1 AND pg.origin = 'seed';
+
+-- name: MarkOrphanCountingSkipped :exec
+UPDATE checks SET orphan_counting_skipped = true WHERE id = $1;
+
+-- name: ResetLinkedOrphanStreaks :exec
+-- Pages some other Page's Snapshot in the Check linked to are not orphaned.
+UPDATE pages pg SET orphan_streak = 0
+WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND EXISTS (
+    SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
+    WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id);
+
+-- name: CountOrphans :many
+-- Orphaned Pages (discovered, active, fetched in the Check, linked by no other
+-- Page's Snapshot) get their streak raised; the third orphaned Check retires
+-- the Page. Returns each orphaned Page's new streak.
+UPDATE pages pg
+SET orphan_streak = pg.orphan_streak + 1,
+    state = CASE WHEN pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
+WHERE pg.state = 'active' AND pg.origin = 'discovered'
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = pg.id)
+  AND NOT EXISTS (
+      SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
+      WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
+RETURNING pg.id, pg.orphan_streak;
+
+-- name: SetCheckEventCounts :exec
+UPDATE checks SET
+    count_new = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind IN ('new', 'reactivated')),
+    count_vanished = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'vanished'),
+    count_retired = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'retired')
+WHERE id = $1;
+
+-- name: ListPageEvents :many
+-- The Pages with the event kind in the Check (new includes reactivated).
+SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
+WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[])
+ORDER BY pg.url;
 
 -- name: ListPagePool :many
 -- last_status is 0 for a Page with no Snapshot yet.

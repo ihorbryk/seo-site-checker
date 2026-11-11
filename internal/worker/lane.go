@@ -220,7 +220,11 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 		for _, l := range found.Links {
 			urls = append(urls, l.URL)
 		}
-		if _, err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
+		added, err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls})
+		if err != nil {
+			return err
+		}
+		if err := recordNewPages(ctx, q, chk.ID, added); err != nil {
 			return err
 		}
 		pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})
@@ -232,6 +236,9 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 		for _, p := range pages {
 			idOf[p.Url] = p.ID
 			ids = append(ids, p.ID)
+		}
+		if err := reactivate(ctx, q, chk.ID, ids); err != nil {
+			return err
 		}
 		if _, err := q.PlanDiscoveredFetches(ctx, dbgen.PlanDiscoveredFetchesParams{CheckID: chk.ID, PageIds: ids}); err != nil {
 			return err
@@ -257,4 +264,27 @@ func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.G
 		}
 	}
 	return nil
+}
+
+// recordNewPages records a `new` event for each Page this Check's discovery
+// added. Repeating it is harmless.
+func recordNewPages(ctx context.Context, q *dbgen.Queries, checkID int64, added []dbgen.UpsertDiscoveredPagesRow) error {
+	if len(added) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(added))
+	for i, a := range added {
+		ids[i] = a.ID
+	}
+	return q.InsertPageEvents(ctx, dbgen.InsertPageEventsParams{CheckID: checkID, Kind: "new", PageIds: ids})
+}
+
+// reactivate brings retired Pages that were linked again back into the pool
+// and records a `reactivated` event, before their Fetches are planned.
+func reactivate(ctx context.Context, q *dbgen.Queries, checkID int64, pageIDs []int64) error {
+	ids, err := q.ReactivateLinkedPages(ctx, pageIDs)
+	if err != nil || len(ids) == 0 {
+		return err
+	}
+	return q.InsertPageEvents(ctx, dbgen.InsertPageEventsParams{CheckID: checkID, Kind: "reactivated", PageIds: ids})
 }

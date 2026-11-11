@@ -157,12 +157,30 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data["Failures"] = failures
-	disc, err := s.q.CheckDiscovery(r.Context(), c.ID)
+	dropped, err := s.q.CountDroppedURLs(r.Context(), c.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	data["NewPages"], data["Dropped"] = disc.NewPages, disc.Dropped
+	data["Dropped"] = dropped
+	for _, sec := range []struct {
+		key, id string
+		kinds   []string
+	}{
+		{"New", "new", []string{"new", "reactivated"}},
+		{"Vanished", "vanished", []string{"vanished"}},
+		{"Retired", "retired", []string{"retired"}},
+	} {
+		rows, err := s.q.ListPageEvents(r.Context(), dbgen.ListPageEventsParams{CheckID: c.ID, Kinds: sec.kinds})
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		data[sec.key] = struct {
+			ID   string
+			Rows []dbgen.ListPageEventsRow
+		}{sec.id, rows}
+	}
 	s.render(w, r, "report", fmt.Sprintf("Check #%d", c.ID), crumbs, data)
 }
 

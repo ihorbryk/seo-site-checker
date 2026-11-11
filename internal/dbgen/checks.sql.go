@@ -12,28 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const checkDiscovery = `-- name: CheckDiscovery :one
-SELECT
-    (SELECT count(*) FROM pages pg
-     WHERE pg.project_id = c.project_id AND pg.origin = 'discovered'
-       AND c.started_at IS NOT NULL AND pg.created_at >= c.started_at)::bigint AS new_pages,
-    (SELECT count(*) FROM dropped_urls d WHERE d.check_id = c.id)::bigint AS dropped
-FROM checks c WHERE c.id = $1
-`
-
-type CheckDiscoveryRow struct {
-	NewPages int64
-	Dropped  int64
-}
-
-// Pages discovered during the Check and URLs it dropped.
-func (q *Queries) CheckDiscovery(ctx context.Context, id int64) (CheckDiscoveryRow, error) {
-	row := q.db.QueryRow(ctx, checkDiscovery, id)
-	var i CheckDiscoveryRow
-	err := row.Scan(&i.NewPages, &i.Dropped)
-	return i, err
-}
-
 const checkProgress = `-- name: CheckProgress :one
 SELECT
     count(*)::bigint AS known,
@@ -80,6 +58,58 @@ func (q *Queries) ClaimNextFetch(ctx context.Context, arg ClaimNextFetchParams) 
 	return id, err
 }
 
+const countDroppedURLs = `-- name: CountDroppedURLs :one
+SELECT count(*)::bigint FROM dropped_urls WHERE check_id = $1
+`
+
+// URLs the Check dropped under the sanity limits.
+func (q *Queries) CountDroppedURLs(ctx context.Context, checkID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countDroppedURLs, checkID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countOrphans = `-- name: CountOrphans :many
+UPDATE pages pg
+SET orphan_streak = pg.orphan_streak + 1,
+    state = CASE WHEN pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
+WHERE pg.state = 'active' AND pg.origin = 'discovered'
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = $1 AND f.page_id = pg.id)
+  AND NOT EXISTS (
+      SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
+      WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id)
+RETURNING pg.id, pg.orphan_streak
+`
+
+type CountOrphansRow struct {
+	ID           int64
+	OrphanStreak int32
+}
+
+// Orphaned Pages (discovered, active, fetched in the Check, linked by no other
+// Page's Snapshot) get their streak raised; the third orphaned Check retires
+// the Page. Returns each orphaned Page's new streak.
+func (q *Queries) CountOrphans(ctx context.Context, checkID int64) ([]CountOrphansRow, error) {
+	rows, err := q.db.Query(ctx, countOrphans, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountOrphansRow
+	for rows.Next() {
+		var i CountOrphansRow
+		if err := rows.Scan(&i.ID, &i.OrphanStreak); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countPendingFetches = `-- name: CountPendingFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending'
 `
@@ -92,7 +122,7 @@ func (q *Queries) CountPendingFetches(ctx context.Context, checkID int64) (int64
 }
 
 const createCheck = `-- name: CreateCheck :one
-INSERT INTO checks (project_id, trigger) VALUES ($1, $2) RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped
+INSERT INTO checks (project_id, trigger) VALUES ($1, $2) RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired
 `
 
 type CreateCheckParams struct {
@@ -118,6 +148,9 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.CountSnapshots,
 		&i.CountFailures,
 		&i.CountSkipped,
+		&i.CountNew,
+		&i.CountVanished,
+		&i.CountRetired,
 	)
 	return i, err
 }
@@ -174,7 +207,7 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped FROM checks
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired FROM checks
 WHERE project_id = $1 AND state IN ('queued', 'running', 'cancelling')
 `
 
@@ -196,12 +229,15 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.CountSnapshots,
 		&i.CountFailures,
 		&i.CountSkipped,
+		&i.CountNew,
+		&i.CountVanished,
+		&i.CountRetired,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -222,6 +258,9 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.CountSnapshots,
 		&i.CountFailures,
 		&i.CountSkipped,
+		&i.CountNew,
+		&i.CountVanished,
+		&i.CountRetired,
 	)
 	return i, err
 }
@@ -334,6 +373,23 @@ func (q *Queries) InsertLinks(ctx context.Context, arg InsertLinksParams) error 
 	return err
 }
 
+const insertPageEvents = `-- name: InsertPageEvents :exec
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT $1, p, $2 FROM unnest($3::bigint[]) AS p
+ON CONFLICT DO NOTHING
+`
+
+type InsertPageEventsParams struct {
+	CheckID int64
+	Kind    string
+	PageIds []int64
+}
+
+func (q *Queries) InsertPageEvents(ctx context.Context, arg InsertPageEventsParams) error {
+	_, err := q.db.Exec(ctx, insertPageEvents, arg.CheckID, arg.Kind, arg.PageIds)
+	return err
+}
+
 const insertSnapshot = `-- name: InsertSnapshot :exec
 INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256, seo_fields)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -365,7 +421,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
@@ -387,6 +443,9 @@ type ListCheckRowsRow struct {
 	CountSnapshots        int32
 	CountFailures         int32
 	CountSkipped          int32
+	CountNew              int32
+	CountVanished         int32
+	CountRetired          int32
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -416,6 +475,9 @@ func (q *Queries) ListCheckRows(ctx context.Context, projectID int64) ([]ListChe
 			&i.CountSnapshots,
 			&i.CountFailures,
 			&i.CountSkipped,
+			&i.CountNew,
+			&i.CountVanished,
+			&i.CountRetired,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -555,6 +617,43 @@ func (q *Queries) ListInFlightFetches(ctx context.Context, checkID int64) ([]Lis
 	return items, nil
 }
 
+const listPageEvents = `-- name: ListPageEvents :many
+SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
+WHERE e.check_id = $1 AND e.kind = ANY($2::text[])
+ORDER BY pg.url
+`
+
+type ListPageEventsParams struct {
+	CheckID int64
+	Kinds   []string
+}
+
+type ListPageEventsRow struct {
+	Url  string
+	Kind string
+}
+
+// The Pages with the event kind in the Check (new includes reactivated).
+func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) ([]ListPageEventsRow, error) {
+	rows, err := q.db.Query(ctx, listPageEvents, arg.CheckID, arg.Kinds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPageEventsRow
+	for rows.Next() {
+		var i ListPageEventsRow
+		if err := rows.Scan(&i.Url, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPagePool = `-- name: ListPagePool :many
 SELECT pg.id, pg.url, pg.state, pg.origin, COALESCE(last.status, 0)::int AS last_status
 FROM pages pg
@@ -601,7 +700,7 @@ func (q *Queries) ListPagePool(ctx context.Context, projectID int64) ([]ListPage
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -622,6 +721,9 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.CountSnapshots,
 		&i.CountFailures,
 		&i.CountSkipped,
+		&i.CountNew,
+		&i.CountVanished,
+		&i.CountRetired,
 	)
 	return i, err
 }
@@ -646,6 +748,15 @@ func (q *Queries) MarkCheckRunning(ctx context.Context, arg MarkCheckRunningPara
 		arg.NoiseRules,
 		arg.Lanes,
 	)
+	return err
+}
+
+const markOrphanCountingSkipped = `-- name: MarkOrphanCountingSkipped :exec
+UPDATE checks SET orphan_counting_skipped = true WHERE id = $1
+`
+
+func (q *Queries) MarkOrphanCountingSkipped(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, markOrphanCountingSkipped, id)
 	return err
 }
 
@@ -727,6 +838,60 @@ func (q *Queries) PlanFetches(ctx context.Context, arg PlanFetchesParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const reactivateLinkedPages = `-- name: ReactivateLinkedPages :many
+UPDATE pages SET state = 'active', orphan_streak = 0
+WHERE id = ANY($1::bigint[]) AND state = 'retired'
+RETURNING id
+`
+
+// Brings retired Pages that a Snapshot linked to back into the pool, with a
+// fresh orphan streak; returns the ones it reactivated.
+func (q *Queries) ReactivateLinkedPages(ctx context.Context, pageIds []int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, reactivateLinkedPages, pageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const resetLinkedOrphanStreaks = `-- name: ResetLinkedOrphanStreaks :exec
+UPDATE pages pg SET orphan_streak = 0
+WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND EXISTS (
+    SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
+    WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id)
+`
+
+// Pages some other Page's Snapshot in the Check linked to are not orphaned.
+func (q *Queries) ResetLinkedOrphanStreaks(ctx context.Context, checkID int64) error {
+	_, err := q.db.Exec(ctx, resetLinkedOrphanStreaks, checkID)
+	return err
+}
+
+const seedFetchOutcome = `-- name: SeedFetchOutcome :one
+SELECT f.outcome FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = $1 AND pg.origin = 'seed'
+`
+
+// The outcome of the seed Page's Fetch in the Check; NULL until it is done.
+func (q *Queries) SeedFetchOutcome(ctx context.Context, checkID int64) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, seedFetchOutcome, checkID)
+	var outcome pgtype.Text
+	err := row.Scan(&outcome)
+	return outcome, err
+}
+
 const setCheckCreatedAt = `-- name: SetCheckCreatedAt :exec
 UPDATE checks SET created_at = $2 WHERE id = $1
 `
@@ -738,6 +903,19 @@ type SetCheckCreatedAtParams struct {
 
 func (q *Queries) SetCheckCreatedAt(ctx context.Context, arg SetCheckCreatedAtParams) error {
 	_, err := q.db.Exec(ctx, setCheckCreatedAt, arg.ID, arg.CreatedAt)
+	return err
+}
+
+const setCheckEventCounts = `-- name: SetCheckEventCounts :exec
+UPDATE checks SET
+    count_new = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind IN ('new', 'reactivated')),
+    count_vanished = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'vanished'),
+    count_retired = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'retired')
+WHERE id = $1
+`
+
+func (q *Queries) SetCheckEventCounts(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, setCheckEventCounts, id)
 	return err
 }
 

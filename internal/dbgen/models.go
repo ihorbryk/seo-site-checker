@@ -82,6 +82,9 @@ type Check struct {
 	CountSnapshots        int32
 	CountFailures         int32
 	CountSkipped          int32
+	CountNew              int32
+	CountVanished         int32
+	CountRetired          int32
 }
 
 type DroppedUrl struct {
@@ -118,6 +121,12 @@ type Page struct {
 	Origin       string
 	OrphanStreak int32
 	CreatedAt    time.Time
+}
+
+type PageEvent struct {
+	CheckID int64
+	PageID  int64
+	Kind    string
 }
 
 type Project struct {
