@@ -1,6 +1,7 @@
 {{define "tabs"}}
 <h1>{{.Project.Domain}}</h1>
 <nav class="tabs">{{if eq .Tab "checks"}}<b>Checks</b>{{else}}<a href="/p/{{.Project.ID}}">Checks</a>{{end}}
+{{if eq .Tab "pages"}}<b>Page pool</b>{{else}}<a href="/p/{{.Project.ID}}/pages">Page pool</a>{{end}}
 {{if eq .Tab "settings"}}<b>Settings</b>{{else}}<a href="/p/{{.Project.ID}}/settings">Settings</a>{{end}}</nav>
 {{end}}
 

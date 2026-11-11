@@ -12,6 +12,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkDiscovery = `-- name: CheckDiscovery :one
+SELECT
+    (SELECT count(*) FROM pages pg
+     WHERE pg.project_id = c.project_id AND pg.origin = 'discovered'
+       AND c.started_at IS NOT NULL AND pg.created_at >= c.started_at)::bigint AS new_pages,
+    (SELECT count(*) FROM dropped_urls d WHERE d.check_id = c.id)::bigint AS dropped
+FROM checks c WHERE c.id = $1
+`
+
+type CheckDiscoveryRow struct {
+	NewPages int64
+	Dropped  int64
+}
+
+// Pages discovered during the Check and URLs it dropped.
+func (q *Queries) CheckDiscovery(ctx context.Context, id int64) (CheckDiscoveryRow, error) {
+	row := q.db.QueryRow(ctx, checkDiscovery, id)
+	var i CheckDiscoveryRow
+	err := row.Scan(&i.NewPages, &i.Dropped)
+	return i, err
+}
+
 const checkProgress = `-- name: CheckProgress :one
 SELECT
     count(*)::bigint AS known,
@@ -56,6 +78,17 @@ func (q *Queries) ClaimNextFetch(ctx context.Context, arg ClaimNextFetchParams) 
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const countPendingFetches = `-- name: CountPendingFetches :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending'
+`
+
+func (q *Queries) CountPendingFetches(ctx context.Context, checkID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingFetches, checkID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createCheck = `-- name: CreateCheck :one
@@ -262,6 +295,42 @@ func (q *Queries) InsertBody(ctx context.Context, arg InsertBodyParams) error {
 		arg.Content,
 		arg.Size,
 	)
+	return err
+}
+
+const insertDroppedURLs = `-- name: InsertDroppedURLs :exec
+INSERT INTO dropped_urls (check_id, url, reason)
+SELECT $1, u, $2
+FROM unnest($3::text[]) AS u
+ON CONFLICT DO NOTHING
+`
+
+type InsertDroppedURLsParams struct {
+	CheckID int64
+	Reason  string
+	Urls    []string
+}
+
+func (q *Queries) InsertDroppedURLs(ctx context.Context, arg InsertDroppedURLsParams) error {
+	_, err := q.db.Exec(ctx, insertDroppedURLs, arg.CheckID, arg.Reason, arg.Urls)
+	return err
+}
+
+const insertLinks = `-- name: InsertLinks :exec
+INSERT INTO links (snapshot_id, target_page_id, source)
+SELECT $1, t, $2
+FROM unnest($3::bigint[]) AS t
+ON CONFLICT DO NOTHING
+`
+
+type InsertLinksParams struct {
+	SnapshotID int64
+	Source     string
+	PageIds    []int64
+}
+
+func (q *Queries) InsertLinks(ctx context.Context, arg InsertLinksParams) error {
+	_, err := q.db.Exec(ctx, insertLinks, arg.SnapshotID, arg.Source, arg.PageIds)
 	return err
 }
 
@@ -486,6 +555,51 @@ func (q *Queries) ListInFlightFetches(ctx context.Context, checkID int64) ([]Lis
 	return items, nil
 }
 
+const listPagePool = `-- name: ListPagePool :many
+SELECT pg.id, pg.url, pg.state, pg.origin, COALESCE(last.status, 0)::int AS last_status
+FROM pages pg
+LEFT JOIN LATERAL (
+    SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
+    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
+) last ON true
+WHERE pg.project_id = $1 ORDER BY pg.url
+`
+
+type ListPagePoolRow struct {
+	ID         int64
+	Url        string
+	State      string
+	Origin     string
+	LastStatus int32
+}
+
+// last_status is 0 for a Page with no Snapshot yet.
+func (q *Queries) ListPagePool(ctx context.Context, projectID int64) ([]ListPagePoolRow, error) {
+	rows, err := q.db.Query(ctx, listPagePool, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPagePoolRow
+	for rows.Next() {
+		var i ListPagePoolRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.State,
+			&i.Origin,
+			&i.LastStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockCheck = `-- name: LockCheck :one
 SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped FROM checks WHERE id = $1 FOR UPDATE
 `
@@ -533,6 +647,64 @@ func (q *Queries) MarkCheckRunning(ctx context.Context, arg MarkCheckRunningPara
 		arg.Lanes,
 	)
 	return err
+}
+
+const pageIDsByURL = `-- name: PageIDsByURL :many
+SELECT id, url, state FROM pages
+WHERE project_id = $1 AND url = ANY($2::text[])
+`
+
+type PageIDsByURLParams struct {
+	ProjectID int64
+	Urls      []string
+}
+
+type PageIDsByURLRow struct {
+	ID    int64
+	Url   string
+	State string
+}
+
+func (q *Queries) PageIDsByURL(ctx context.Context, arg PageIDsByURLParams) ([]PageIDsByURLRow, error) {
+	rows, err := q.db.Query(ctx, pageIDsByURL, arg.ProjectID, arg.Urls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageIDsByURLRow
+	for rows.Next() {
+		var i PageIDsByURLRow
+		if err := rows.Scan(&i.ID, &i.Url, &i.State); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const planDiscoveredFetches = `-- name: PlanDiscoveredFetches :execrows
+INSERT INTO fetches (check_id, page_id)
+SELECT $1, pg.id FROM pages pg
+WHERE pg.id = ANY($2::bigint[]) AND pg.state = 'active'
+ORDER BY pg.id
+ON CONFLICT (check_id, page_id) DO NOTHING
+`
+
+type PlanDiscoveredFetchesParams struct {
+	CheckID int64
+	PageIds []int64
+}
+
+// Gives every active linked Page without a Fetch in this Check a pending one.
+func (q *Queries) PlanDiscoveredFetches(ctx context.Context, arg PlanDiscoveredFetchesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, planDiscoveredFetches, arg.CheckID, arg.PageIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const planFetches = `-- name: PlanFetches :execrows
@@ -595,4 +767,42 @@ type SetFetchJobParams struct {
 func (q *Queries) SetFetchJob(ctx context.Context, arg SetFetchJobParams) error {
 	_, err := q.db.Exec(ctx, setFetchJob, arg.ID, arg.JobID)
 	return err
+}
+
+const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :many
+INSERT INTO pages (project_id, url, origin)
+SELECT $1, u, 'discovered' FROM unnest($2::text[]) AS u
+ON CONFLICT (project_id, url) DO NOTHING
+RETURNING id, url
+`
+
+type UpsertDiscoveredPagesParams struct {
+	ProjectID int64
+	Urls      []string
+}
+
+type UpsertDiscoveredPagesRow struct {
+	ID  int64
+	Url string
+}
+
+// Adds the URLs as discovered Pages of the Project; returns the ones that were new.
+func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) ([]UpsertDiscoveredPagesRow, error) {
+	rows, err := q.db.Query(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpsertDiscoveredPagesRow
+	for rows.Next() {
+		var i UpsertDiscoveredPagesRow
+		if err := rows.Scan(&i.ID, &i.Url); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

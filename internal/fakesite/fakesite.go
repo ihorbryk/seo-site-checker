@@ -46,6 +46,8 @@ type Site struct {
 	faults map[string]Fault
 	hits   map[string]int
 	reqs   map[string][]http.Header
+	// inFlight is the number of requests being served, maxInFlight its peak.
+	inFlight, maxInFlight int
 }
 
 // New starts a fake site answering for host (e.g. "shop.test"); it is closed
@@ -102,6 +104,14 @@ func (s *Site) Requests(path string) []http.Header {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.reqs[path])
+}
+
+// MaxConcurrent is the largest number of requests the site was serving at
+// the same time.
+func (s *Site) MaxConcurrent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxInFlight
 }
 
 // Host is the fake host the site answers for.
@@ -173,7 +183,14 @@ func (s *Site) serve(w http.ResponseWriter, r *http.Request) {
 	s.reqs[path] = append(s.reqs[path], r.Header.Clone())
 	resp, found := s.pages[path]
 	fault := s.faults[path]
+	s.inFlight++
+	s.maxInFlight = max(s.maxInFlight, s.inFlight)
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
 
 	if fault.Delay > 0 {
 		select {
