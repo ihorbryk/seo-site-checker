@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
@@ -31,17 +33,29 @@ func (w *laneWorker) Timeout(job *river.Job[check.LaneArgs]) time.Duration {
 // Work performs the Fetch claimed under this job's id and then, in one
 // transaction, stores the result, claims the next Fetch, re-enqueues the lane
 // and completes this job. Transport errors are Fetch failures, never job
-// errors. A retried lane finds its Fetch still claimed and runs it again from
-// scratch; on the last attempt a failing store records an `internal` failure
-// so the Check still finishes.
+// errors. Only our own errors (database errors, panics, the worker stopping)
+// are job errors. A retried lane finds its Fetch still claimed and runs it
+// again from scratch; on the last attempt the Fetch is recorded as an
+// `internal` failure and the lane carries on, so the Check still finishes.
 func (w *laneWorker) Work(ctx context.Context, job *river.Job[check.LaneArgs]) error {
 	claimed, err := w.q.GetClaimedFetch(ctx, pgtype.Int8{Int64: job.ID, Valid: true})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return w.advance(ctx, job, nil, fetchResult{})
 	}
 	if err != nil {
-		return err
+		return w.lastAttempt(ctx, job, nil, err)
 	}
+	return w.lastAttempt(ctx, job, &claimed, w.perform(ctx, job, claimed))
+}
+
+// perform runs the claimed Fetch and stores its result. A panic is returned as
+// an error.
+func (w *laneWorker) perform(ctx context.Context, job *river.Job[check.LaneArgs], claimed dbgen.GetClaimedFetchRow) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
+		}
+	}()
 	chk, err := w.q.GetCheck(ctx, claimed.CheckID)
 	if err != nil {
 		return err
@@ -54,13 +68,22 @@ func (w *laneWorker) Work(ctx context.Context, job *river.Job[check.LaneArgs]) e
 	if err != nil {
 		return err // the worker is stopping: let River retry the lane
 	}
-	err = w.advance(ctx, job, &claimed, res)
-	if err != nil && job.Attempt >= job.MaxAttempts {
-		w.log.Error("lane failed on its last attempt; recording an internal failure", "job", job.ID, "err", err)
-		failed := fetchResult{FailKind: FailInternal, FailMsg: err.Error(), Duration: res.Duration}
-		return w.advance(ctx, job, &claimed, failed)
+	return w.advance(ctx, job, &claimed, res)
+}
+
+// lastAttempt returns err so River retries the lane, except on the last
+// attempt, where retrying is over: the claimed Fetch (if any) is recorded as
+// an `internal` failure and the lane advances anyway.
+func (w *laneWorker) lastAttempt(ctx context.Context, job *river.Job[check.LaneArgs], claimed *dbgen.GetClaimedFetchRow, err error) error {
+	if err == nil || job.Attempt < job.MaxAttempts {
+		return err
 	}
-	return err
+	w.log.Error("lane failed on its last attempt; recording an internal failure", "job", job.ID, "err", err)
+	// The job's context may be what ended (timeout, shutdown); this must still land.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	failed := fetchResult{FailKind: FailInternal, FailMsg: err.Error()}
+	return w.advance(ctx, job, claimed, failed)
 }
 
 // advance is the lane's single transaction. claimed is nil when the lane has
