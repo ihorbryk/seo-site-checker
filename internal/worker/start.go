@@ -24,6 +24,36 @@ type startWorker struct {
 // already claimed under its job id. It is safe to repeat: a Check that is no
 // longer queued is left alone.
 func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckArgs]) error {
+	// robots.txt is fetched before the planning transaction, so no row lock is
+	// held during the request. A retry fetches it again; nothing is stored
+	// until the transaction commits.
+	pre, err := w.q.GetCheck(ctx, job.Args.CheckID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // the Check is gone; nothing to start
+		}
+		return err
+	}
+	if pre.State != check.StateQueued {
+		return nil
+	}
+	project, err := w.q.GetProject(ctx, pre.ProjectID)
+	if err != nil {
+		return err
+	}
+	settings, err := check.SettingsOf(project)
+	if err != nil {
+		return err
+	}
+	var robotsRes *robotsResult
+	if settings.RespectRobots {
+		res, err := fetchRobots(ctx, w.client, project.Domain, settings)
+		if err != nil {
+			return err
+		}
+		robotsRes = &res
+	}
+
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -41,17 +71,14 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 	if c.State != check.StateQueued {
 		return nil
 	}
-	project, err := q.GetProject(ctx, c.ProjectID)
-	if err != nil {
-		return err
-	}
-	settings, err := check.SettingsOf(project)
-	if err != nil {
-		return err
-	}
 	rawSettings, err := json.Marshal(settings)
 	if err != nil {
 		return err
+	}
+	if robotsRes != nil {
+		if err := storeRobots(ctx, q, c.ID, *robotsRes); err != nil {
+			return err
+		}
 	}
 	rawRules, err := diff.BuiltinRules().JSON() // per-Project Noise rules join these later
 	if err != nil {

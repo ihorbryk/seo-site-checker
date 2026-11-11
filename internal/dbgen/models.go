@@ -85,6 +85,10 @@ type Check struct {
 	CountNew              int32
 	CountVanished         int32
 	CountRetired          int32
+	RobotsStatus          pgtype.Int4
+	RobotsBody            []byte
+	RobotsFetchedAt       pgtype.Timestamptz
+	RobotsFailureKind     pgtype.Text
 }
 
 type Diff struct {

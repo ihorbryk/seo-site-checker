@@ -66,6 +66,9 @@ func (w *laneWorker) perform(ctx context.Context, job *river.Job[check.LaneArgs]
 	if err != nil {
 		return err
 	}
+	if reason := robotsSkip(chk, settings, claimed.Url); reason != "" {
+		return w.advance(ctx, job, &claimed, fetchResult{SkipReason: reason})
+	}
 	res, err := fetch(ctx, w.client, claimed.Url, settings)
 	if err != nil {
 		return err // the worker is stopping: let River retry the lane
@@ -188,6 +191,11 @@ func raiseLanes(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbg
 }
 
 func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, res fetchResult) error {
+	if res.SkipReason != "" {
+		return q.FinishFetchSkipped(ctx, dbgen.FinishFetchSkippedParams{
+			ID: f.ID, SkipReason: pgtype.Text{String: res.SkipReason, Valid: true},
+		})
+	}
 	dur := pgtype.Int4{Int32: int32(res.Duration.Milliseconds()), Valid: true}
 	if res.FailKind != "" {
 		return q.FinishFetchFailure(ctx, dbgen.FinishFetchFailureParams{

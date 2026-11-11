@@ -15,7 +15,7 @@ type finalizeWorker struct {
 	*deps
 }
 
-// Work records which Pages were orphaned, vanished or retired, caches the Report counts and marks the Check finished. Repeating it on
+// Work records which Pages were orphaned, vanished or retired, caches the Report counts and marks the Check finished, or cancelled when the user asked for that. Repeating it on
 // a Check that has ended does nothing.
 func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.FinalizeCheckArgs]) error {
 	tx, err := w.pool.Begin(ctx)
@@ -32,13 +32,23 @@ func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.Finalize
 		}
 		return err
 	}
-	if c.State != check.StateRunning {
+	end := check.StateFinished
+	switch c.State {
+	case check.StateRunning:
+		if err := countOrphans(ctx, q, c.ID); err != nil {
+			return err
+		}
+	case check.StateCancelling:
+		// The lanes have ended, so no Fetch is in flight. The Check saw only
+		// part of the Page pool: skip the rest and leave orphans alone.
+		if err := q.SkipPendingFetches(ctx, c.ID); err != nil {
+			return err
+		}
+		end = check.StateCancelled
+	default:
 		return nil
 	}
-	if err := countOrphans(ctx, q, c.ID); err != nil {
-		return err
-	}
-	if err := q.FinishCheck(ctx, c.ID); err != nil {
+	if err := q.FinishCheck(ctx, dbgen.FinishCheckParams{ID: c.ID, State: end}); err != nil {
 		return err
 	}
 	if err := q.SetCheckEventCounts(ctx, c.ID); err != nil {

@@ -47,6 +47,8 @@ type fetchResult struct {
 	FailKind string // empty when a response was received
 	FailMsg  string
 
+	SkipReason string // set when no request was sent (robots.txt)
+
 	Duration time.Duration
 }
 
@@ -70,15 +72,10 @@ func fetch(ctx context.Context, client *http.Client, url string, s check.Setting
 }
 
 func doFetch(ctx context.Context, client *http.Client, url string, s check.Settings) (fetchResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := newRequest(ctx, url, s)
 	if err != nil {
 		return fetchResult{}, err
 	}
-	for _, h := range s.CustomHeaders {
-		req.Header.Add(h.Name, h.Value)
-	}
-	req.Header.Set("User-Agent", s.UserAgent)
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return fetchResult{}, err
@@ -101,6 +98,19 @@ func doFetch(ctx context.Context, client *http.Client, url string, s check.Setti
 	}
 	res.Body, res.HasBody = body, true
 	return res, nil
+}
+
+// newRequest is a GET of url with the Check's user agent and custom headers.
+func newRequest(ctx context.Context, url string, s check.Settings) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range s.CustomHeaders {
+		req.Header.Add(h.Name, h.Value)
+	}
+	req.Header.Set("User-Agent", s.UserAgent)
+	return req, nil
 }
 
 func isHTML(contentType string) bool {
