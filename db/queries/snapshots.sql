@@ -54,3 +54,7 @@ SELECT
     count(*) FILTER (WHERE d.tier = 'empty')::bigint AS unchanged
 FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
 WHERE s.check_id = $1;
+
+-- name: GetDiffBaseline :one
+-- The Snapshot a Snapshot was compared with; no row for a Page's first Snapshot.
+SELECT baseline_id FROM diffs WHERE snapshot_id = $1;

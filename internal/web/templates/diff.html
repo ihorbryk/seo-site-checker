@@ -1,0 +1,72 @@
+{{define "diffcss"}}{{end}}
+
+{{define "diff"}}
+<div class="diffbox">
+<style>
+.diff table{font-family:ui-monospace,Menlo,monospace;font-size:12px;table-layout:fixed}
+.diff td{padding:1px 6px;border:0;white-space:pre-wrap;word-break:break-all}.diff td.n{width:38px;color:#9aa1ad;text-align:right;user-select:none}
+.diff .add{background:#e6f7ec}.diff .del{background:#fdecea}.diff .gap td{background:#f0f3f8;color:#7a8291;text-align:center}
+.diff .op{width:14px;color:#9aa1ad}
+.sdel{background:#fde2e1;padding:0 3px}.sadd{background:#dcf5e6;padding:0 3px}
+.k-changed{background:#e3ecff;color:#2547a0}.k-added{background:#dcf5e6;color:#11743d}.k-removed{background:#fde2e1;color:#b42318}
+</style>
+<h1>Diff <a class="mono" href="{{.After.Url}}">{{.Path}}</a></h1>
+{{if .First}}
+<p id="first-snapshot" class="flash">First Snapshot — no Diff. A Page's first Snapshot has nothing to be compared with.</p>
+<p><a href="/s/{{.After.ID}}">Snapshot #{{.After.ID}}</a></p>
+{{else}}
+<p id="diff-meta" class="muted">
+<a href="/s/{{.Before.ID}}">Snapshot #{{.Before.ID}}</a> (<a href="/c/{{.Before.CheckID}}">Check #{{.Before.CheckID}}</a>, {{.BeforeFetched}})
+→ <a href="/s/{{.After.ID}}">Snapshot #{{.After.ID}}</a> (<a href="/c/{{.After.CheckID}}">Check #{{.After.CheckID}}</a>, {{.AfterFetched}})
+<span id="noise-source"></span>
+</p>
+{{if .Empty}}<p id="empty-diff" class="flash">Empty Diff — nothing differs once Noise rules are applied.</p>{{end}}
+
+{{if .SEO}}
+<h3>SEO fields</h3>
+<table id="diff-seo">
+<tr><th>Field</th><th>Before</th><th>After</th></tr>
+{{range .SEO}}<tr><th>{{.Name}}</th><td><span class="sdel">{{.Before}}</span></td><td><span class="sadd">{{.After}}</span></td></tr>
+{{end}}</table>
+{{end}}
+
+{{if or .Headers .Ignored}}
+<h3>Headers</h3>
+{{if .Headers}}<table id="diff-headers">
+<tr><th>Change</th><th>Header</th><th>Before</th><th>After</th></tr>
+{{range .Headers}}<tr class="hdr-{{.Kind}}"><td><span class="badge k-{{.Kind}}">{{.Kind}}</span></td><th>{{.Name}}</th>
+<td class="mono">{{range .Before}}<div class="sdel">{{.}}</div>{{end}}</td><td class="mono">{{range .After}}<div class="sadd">{{.}}</div>{{end}}</td></tr>
+{{end}}</table>{{end}}
+{{if .Ignored}}<p id="ignored-headers" class="muted small">Ignored by Noise rules: <span class="mono">{{.Ignored}}</span></p>{{end}}
+{{end}}
+
+{{if or .BodyNote .Mode}}
+<h3>Body</h3>
+{{if .BodyNote}}<p id="body-note"><span class="badge">{{.BodyNote}}</span></p>
+{{else if .BodyChanged}}
+<p id="diff-toggle" class="small">
+{{if eq .Mode "split"}}<b>Side by side</b>{{else}}<a href="/d/{{.After.ID}}?diff=split" hx-get="/d/{{.After.ID}}?diff=split" hx-target="closest .diffbox" hx-swap="outerHTML">Side by side</a>{{end}}
+·
+{{if eq .Mode "unified"}}<b>Unified</b>{{else}}<a href="/d/{{.After.ID}}?diff=unified" hx-get="/d/{{.After.ID}}?diff=unified" hx-target="closest .diffbox" hx-swap="outerHTML">Unified</a>{{end}}
+</p>
+<div class="diff" id="body-diff" data-mode="{{.Mode}}">
+{{if eq .Mode "unified"}}
+<table class="unified">
+{{range .Unified}}{{if eq .Kind "gap"}}<tr class="gap"><td colspan="4">⋯ {{.Skipped}} unchanged lines ⋯</td></tr>
+{{else}}<tr class="{{.Kind}}"><td class="n">{{if .OldNo}}{{.OldNo}}{{end}}</td><td class="n">{{if .NewNo}}{{.NewNo}}{{end}}</td><td class="op">{{if eq .Kind "add"}}+{{else if eq .Kind "del"}}-{{end}}</td><td>{{.Text}}</td></tr>
+{{end}}{{end}}</table>
+{{else}}
+<table class="split">
+{{range .Split}}{{if .Gap}}<tr class="gap"><td colspan="4">⋯ {{.Gap}} unchanged lines ⋯</td></tr>
+{{else}}<tr>
+{{with .Left}}<td class="n">{{.OldNo}}</td><td class="{{if eq .Kind "del"}}del{{end}}">{{.Text}}</td>{{else}}<td class="n"></td><td></td>{{end}}
+{{with .Right}}<td class="n">{{.NewNo}}</td><td class="{{if eq .Kind "add"}}add{{end}}">{{.Text}}</td>{{else}}<td class="n"></td><td></td>{{end}}
+</tr>
+{{end}}{{end}}</table>
+{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}
+</div>
+{{end}}
