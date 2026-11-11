@@ -127,6 +127,8 @@ run = 'test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }'
 
 [tasks."lint:vet"]
 description = "go vet ./..."
+# After the steps that rewrite files, so vet never compiles a half-written dbgen or go.mod.
+depends = ["lint:sqlc", "lint:tidy"]
 run = "go vet ./..."
 
 [tasks."lint:sqlc"]
@@ -138,6 +140,8 @@ git diff --exit-code -- internal/dbgen
 
 [tasks."lint:tidy"]
 description = "go mod tidy and fail if go.mod or go.sum change"
+# After sqlc, since both touch the module the other reads.
+depends = ["lint:sqlc"]
 run = '''
 go mod tidy
 git diff --exit-code -- go.mod go.sum
@@ -145,6 +149,7 @@ git diff --exit-code -- go.mod go.sum
 
 [tasks."lint:literals"]
 description = "Page state, origin and event kinds use internal/page constants, not string literals"
+depends = ["lint:sqlc", "lint:tidy"]
 run = "go run ./internal/tools/pageliterals"
 
 [tasks.test]
