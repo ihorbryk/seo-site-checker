@@ -82,6 +82,29 @@ func TestAddCreatesProjectWithSeedPageAndDefaults(t *testing.T) {
 	}
 }
 
+func TestEnsureDemoCreatesAManualProjectOnceOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+
+	created, err := project.EnsureDemo(ctx, pool, "Demo.example")
+	if err != nil || !created {
+		t.Fatalf("first call: created=%v err=%v", created, err)
+	}
+	created, err = project.EnsureDemo(ctx, pool, "demo.example")
+	if err != nil || created {
+		t.Fatalf("second call must be a no-op: created=%v err=%v", created, err)
+	}
+
+	projects, _ := dbgen.New(pool).ListProjects(ctx)
+	if len(projects) != 1 || projects[0].Domain != "demo.example" || projects[0].Schedule != "manual" {
+		t.Fatalf("want one manual-only demo Project, got %+v", projects)
+	}
+	pages, _ := dbgen.New(pool).ListPagesByProject(ctx, projects[0].ID)
+	if len(pages) != 1 {
+		t.Fatalf("demo Project should have only its seed Page, got %d", len(pages))
+	}
+}
+
 func TestDomainIsImmutable(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)

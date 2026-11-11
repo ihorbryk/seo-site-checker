@@ -72,6 +72,16 @@ func Add(ctx context.Context, db Beginner, input string) (dbgen.Project, error) 
 	return AddWithSchedule(ctx, db, input, "daily")
 }
 
+// EnsureDemo creates the manual-only demo Project for domain unless a Project
+// for it exists, and reports whether it created one.
+func EnsureDemo(ctx context.Context, db Beginner, domain string) (bool, error) {
+	_, err := AddWithSchedule(ctx, db, domain, "manual")
+	if errors.Is(err, ErrDuplicate) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // AddWithSchedule is Add with a chosen schedule (the demo Project is "manual").
 func AddWithSchedule(ctx context.Context, db Beginner, input, schedule string) (dbgen.Project, error) {
 	domain, err := NormalizeDomain(input)
