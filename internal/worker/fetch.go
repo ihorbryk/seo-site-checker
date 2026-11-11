@@ -83,7 +83,9 @@ func doFetch(ctx context.Context, client *http.Client, url string, s check.Setti
 	defer resp.Body.Close()
 
 	res := fetchResult{Status: resp.StatusCode, Headers: headerPairs(resp.Header)}
-	if !isHTML(resp.Header.Get("Content-Type")) {
+	// A 3xx body is never read: only its headers matter, so even an oversized
+	// one is not a failure.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 || !isHTML(resp.Header.Get("Content-Type")) {
 		return res, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
