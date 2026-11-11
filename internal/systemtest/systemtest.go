@@ -221,6 +221,35 @@ func (s *System) RunCheck(p dbgen.Project) int64 {
 	return atoi(s.T, strings.TrimPrefix(loc, "/c/"))
 }
 
+// AddPage submits the Page pool tab's Add Page form and returns the response.
+func (s *System) AddPage(p dbgen.Project, rawURL string) *httptest.ResponseRecorder {
+	s.T.Helper()
+	return s.Post("/p/"+itoa(p.ID)+"/pages", url.Values{"url": {rawURL}})
+}
+
+// PageID returns the id of the Project's Page with the exact normalised url.
+func (s *System) PageID(p dbgen.Project, pageURL string) int64 {
+	s.T.Helper()
+	var id int64
+	err := s.Pool.QueryRow(context.Background(), `SELECT id FROM pages WHERE project_id = $1 AND url = $2`, p.ID, pageURL).Scan(&id)
+	if err != nil {
+		s.T.Fatalf("no Page %q: %v", pageURL, err)
+	}
+	return id
+}
+
+// IgnorePage presses Ignore on the Page's history page.
+func (s *System) IgnorePage(pageID int64) *httptest.ResponseRecorder {
+	s.T.Helper()
+	return s.Post("/pg/"+itoa(pageID)+"/ignore", url.Values{})
+}
+
+// RestorePage presses Restore on the Page's history page.
+func (s *System) RestorePage(pageID int64) *httptest.ResponseRecorder {
+	s.T.Helper()
+	return s.Post("/pg/"+itoa(pageID)+"/restore", url.Values{})
+}
+
 // WaitForCheck polls until the Check has ended and returns its Report page.
 func (s *System) WaitForCheck(id int64) *goquery.Document {
 	s.T.Helper()

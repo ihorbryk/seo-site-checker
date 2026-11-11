@@ -7,7 +7,6 @@ package dbgen
 
 import (
 	"context"
-	"time"
 )
 
 const createPage = `-- name: CreatePage :one
@@ -144,60 +143,6 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.CustomHeaders,
 			&i.ExcludePatterns,
 			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProjectsWithActivePages = `-- name: ListProjectsWithActivePages :many
-SELECT
-    p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at,
-    (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages
-FROM projects p
-ORDER BY p.domain
-`
-
-type ListProjectsWithActivePagesRow struct {
-	ID              int64
-	Domain          string
-	Schedule        string
-	UserAgent       string
-	TimeoutS        int32
-	MaxParallel     int32
-	RespectRobots   bool
-	CustomHeaders   []byte
-	ExcludePatterns []string
-	CreatedAt       time.Time
-	ActivePages     int64
-}
-
-func (q *Queries) ListProjectsWithActivePages(ctx context.Context) ([]ListProjectsWithActivePagesRow, error) {
-	rows, err := q.db.Query(ctx, listProjectsWithActivePages)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProjectsWithActivePagesRow
-	for rows.Next() {
-		var i ListProjectsWithActivePagesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Domain,
-			&i.Schedule,
-			&i.UserAgent,
-			&i.TimeoutS,
-			&i.MaxParallel,
-			&i.RespectRobots,
-			&i.CustomHeaders,
-			&i.ExcludePatterns,
-			&i.CreatedAt,
-			&i.ActivePages,
 		); err != nil {
 			return nil, err
 		}

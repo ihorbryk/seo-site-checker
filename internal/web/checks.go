@@ -12,7 +12,6 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
-	"github.com/ihorbryk/seo-site-checker/internal/exclude"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,36 +87,6 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
 		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active,
 	})
-}
-
-func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
-	if !ok {
-		return
-	}
-	p, err := s.q.GetProject(r.Context(), id)
-	if err != nil {
-		s.notFoundOr(w, r, err)
-		return
-	}
-	pages, err := s.q.ListPagePool(r.Context(), id)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	type poolRow struct {
-		URL, State string
-		LastStatus int32
-	}
-	rows := make([]poolRow, 0, len(pages))
-	for _, pg := range pages {
-		state := pg.State
-		if state == "active" && pg.Origin != "seed" && exclude.Excluded(p.ExcludePatterns, pg.Url) {
-			state = "matches exclude pattern"
-		}
-		rows = append(rows, poolRow{URL: pg.Url, State: state, LastStatus: pg.LastStatus})
-	}
-	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), map[string]any{"Project": p, "Tab": "pages", "Pages": rows})
 }
 
 func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
