@@ -25,7 +25,7 @@ Adding links on the Project's domain found in a Snapshot's HTML to the Project's
 _Avoid_: Crawling, spidering, link harvesting
 
 **Orphaned Page**:
-A Page that no Snapshot in a Check linked to. It is still fetched.
+A Page that no other Page's Snapshot in a Check linked to (a Page linking or redirecting to itself doesn't count). It is still fetched.
 _Avoid_: Dead page, unlinked page
 
 **Vanished Page**:
