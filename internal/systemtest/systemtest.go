@@ -127,6 +127,15 @@ func (s *System) SaveRequestSettings(p dbgen.Project, form url.Values) {
 	}
 }
 
+// SaveNoiseRules submits the Settings tab's Noise rules form and fails the
+// test unless it is accepted.
+func (s *System) SaveNoiseRules(p dbgen.Project, form url.Values) {
+	s.T.Helper()
+	if w := s.Post("/p/"+itoa(p.ID)+"/settings/noise", form); w.Code != 200 {
+		s.T.Fatalf("save noise rules: status %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // Get requests path from the web app.
 func (s *System) Get(path string) *httptest.ResponseRecorder {
 	s.T.Helper()

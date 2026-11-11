@@ -8,6 +8,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
 	"github.com/ihorbryk/seo-site-checker/internal/project"
 )
 
@@ -47,11 +48,34 @@ func viewOfForm(f url.Values) settingsView {
 	return v
 }
 
+// noiseView is the Noise rules form's values as text.
+type noiseView struct{ HeaderNames, BodyMasks string }
+
+func noiseViewOf(n project.NoiseRules) noiseView {
+	return noiseView{HeaderNames: strings.Join(n.HeaderNames, "\n"), BodyMasks: strings.Join(n.BodyMasks, "\n")}
+}
+
 func (s *server) settingsScreen(w http.ResponseWriter, r *http.Request, p dbgen.Project, v settingsView, errs project.FieldErrors, saved bool) {
+	s.settingsScreenN(w, r, p, v, errs, saved, nil, nil)
+}
+
+// settingsScreenN renders the Settings tab; nv is the Noise rules form's
+// values (nil: the saved ones).
+func (s *server) settingsScreenN(w http.ResponseWriter, r *http.Request, p dbgen.Project, v settingsView, errs project.FieldErrors, saved bool, nv *noiseView, nerrs project.FieldErrors) {
+	if nv == nil {
+		n, err := project.LoadNoiseRules(r.Context(), s.q, p.ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		view := noiseViewOf(n)
+		nv = &view
+	}
 	crumbs := append(projectCrumbs(p, true), crumb{Label: "Settings"})
 	s.render(w, r, "settings", "Settings · "+p.Domain, crumbs, map[string]any{
 		"Project": p, "Tab": "settings", "S": v, "Schedules": project.Schedules,
 		"UserAgents": project.UserAgentSuggestions, "Errors": flat(errs), "Saved": saved,
+		"N": *nv, "NoiseErrors": flatNoise(nerrs), "Builtin": diff.BuiltinRules(),
 	})
 }
 
@@ -122,4 +146,49 @@ func flat(errs project.FieldErrors) []string {
 		out = append(out, errs[field]...)
 	}
 	return out
+}
+
+func flatNoise(errs project.FieldErrors) []string {
+	return append(append([]string{}, errs["header_names"]...), errs["body_masks"]...)
+}
+
+func (s *server) saveNoiseRules(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.idParam(w, r)
+	if !ok {
+		return
+	}
+	p, err := s.q.GetProject(r.Context(), id)
+	if err != nil {
+		s.notFoundOr(w, r, err)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	n, errs := project.ParseNoiseRules(r.PostForm)
+	if len(errs) > 0 {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		if r.Header.Get("HX-Request") == "true" {
+			s.fragment(w, r, "settingsResult", map[string]any{"Errors": flatNoise(errs)})
+			return
+		}
+		rs, err := project.SettingsOf(p)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		nv := noiseView{HeaderNames: r.PostForm.Get("header_names"), BodyMasks: r.PostForm.Get("body_masks")}
+		s.settingsScreenN(w, r, p, viewOf(rs), nil, false, &nv, errs)
+		return
+	}
+	if err := project.SaveNoiseRules(r.Context(), s.pool, id, n); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		s.fragment(w, r, "settingsResult", map[string]any{"Saved": true})
+		return
+	}
+	http.Redirect(w, r, "/p/"+strconv.FormatInt(id, 10)+"/settings", http.StatusSeeOther)
 }

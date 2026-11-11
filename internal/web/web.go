@@ -61,6 +61,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.H
 	mux.HandleFunc("POST /p/{id}/checks", s.runCheck)
 	mux.HandleFunc("GET /p/{id}/settings", s.settingsPage)
 	mux.HandleFunc("POST /p/{id}/settings", s.saveSettings)
+	mux.HandleFunc("POST /p/{id}/settings/noise", s.saveNoiseRules)
 	mux.HandleFunc("GET /p/{id}/settings/header-row", s.headerRow)
 	mux.HandleFunc("GET /p/{id}/pages", s.projectPages)
 	mux.HandleFunc("POST /p/{id}/pages", s.addPage)
