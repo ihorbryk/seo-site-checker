@@ -23,9 +23,9 @@ var reportSections = []struct {
 	Key, ID string
 	Kinds   []string
 }{
-	{"New", "new", []string{page.EventNew, page.EventReactivated}},
-	{"Vanished", "vanished", []string{page.EventVanished}},
-	{"Retired", "retired", []string{page.EventRetired}},
+	{"New", "new", []string{page.EventNew, page.EventReactivated}}, // pageliterals:ok HTML id
+	{"Vanished", "vanished", []string{page.EventVanished}},         // pageliterals:ok HTML id
+	{"Retired", "retired", []string{page.EventRetired}},            // pageliterals:ok HTML id
 }
 
 // eventSection is one Page event section of the Report.

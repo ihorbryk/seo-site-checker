@@ -21,6 +21,27 @@ Templates left by older migration sets (`seo_tpl_*`) are harmless; drop them
 with `psql "$DATABASE_URL" -Atc "select datname from pg_database where datname like 'seo_tpl_%'"`
 and `DROP DATABASE` each.
 
+# Development workflow
+
+- **One shared Postgres.** Parallel worktrees and agents run against one
+  server through `DATABASE_URL` (see the table above). Never start or stop
+  daemons from a worktree.
+- **Migrations**: one per change, made with `mise run migrate:new <name>`.
+  Goose files carry a working `Down`.
+- **sqlc**: queries live in `db/queries/*.sql`. When `internal/dbgen` conflicts
+  in a merge or rebase, resolve the `.sql` sources, then run `mise run gen`;
+  regenerated output replaces the conflicted files.
+- **Lint**: `mise run lint` runs `lint:fmt`, `lint:vet`, `lint:sqlc`,
+  `lint:tidy` and `lint:literals`; run one by name to see only its output.
+  `lint:sqlc` and `lint:tidy` compare against the working tree with
+  `git diff`, so commit regenerated `internal/dbgen` (and `go.mod`/`go.sum`)
+  before `mise run lint`.
+- **Guards**: `lint:literals` rejects Page state, origin and event string
+  literals outside `internal/page`; mark a same-spelling literal with
+  `// pageliterals:ok <reason>`. `internal/worker` has a test that only
+  `finalize.go` writes `page_events`.
+- Review judgement calls live in `CODING_STANDARDS.md`.
+
 # The system harness (`internal/systemtest`)
 
 Scenario tests (Checks, discovery, Reports, ...) go through the in-process
