@@ -56,8 +56,8 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (project_id, sha256) DO NOTHING;
 
 -- name: InsertSnapshot :exec
-INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256, seo_fields)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 
 -- name: SetFetchJob :exec
 UPDATE fetches SET job_id = $2 WHERE id = $1;

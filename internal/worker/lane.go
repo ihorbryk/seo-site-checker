@@ -9,6 +9,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -146,9 +147,15 @@ func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbge
 	if err != nil {
 		return err
 	}
+	seoFields, err := json.Marshal(seo.Extract(seo.Input{
+		Status: res.Status, Headers: res.Headers, Body: res.Body, HasBody: res.HasBody,
+	}))
+	if err != nil {
+		return err
+	}
 	err = q.InsertSnapshot(ctx, dbgen.InsertSnapshotParams{
 		ID: f.ID, PageID: f.PageID, CheckID: chk.ID, FetchedAt: time.Now(),
-		Status: int32(res.Status), Headers: headers, BodySha256: sum,
+		Status: int32(res.Status), Headers: headers, BodySha256: sum, SeoFields: seoFields,
 	})
 	if err != nil {
 		return err

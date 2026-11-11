@@ -266,8 +266,8 @@ func (q *Queries) InsertBody(ctx context.Context, arg InsertBodyParams) error {
 }
 
 const insertSnapshot = `-- name: InsertSnapshot :exec
-INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO snapshots (id, page_id, check_id, fetched_at, status, headers, body_sha256, seo_fields)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertSnapshotParams struct {
@@ -278,6 +278,7 @@ type InsertSnapshotParams struct {
 	Status     int32
 	Headers    []byte
 	BodySha256 []byte
+	SeoFields  []byte
 }
 
 func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) error {
@@ -289,6 +290,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 		arg.Status,
 		arg.Headers,
 		arg.BodySha256,
+		arg.SeoFields,
 	)
 	return err
 }
