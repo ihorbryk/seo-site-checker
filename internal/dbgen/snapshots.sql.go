@@ -37,26 +37,6 @@ func (q *Queries) CheckSnapshotRedirect(ctx context.Context, arg CheckSnapshotRe
 	return i, err
 }
 
-const countDiffs = `-- name: CountDiffs :one
-SELECT
-    count(*) FILTER (WHERE d.tier <> 'empty')::bigint AS changed,
-    count(*) FILTER (WHERE d.tier = 'empty')::bigint AS unchanged
-FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
-WHERE s.check_id = $1
-`
-
-type CountDiffsRow struct {
-	Changed   int64
-	Unchanged int64
-}
-
-func (q *Queries) CountDiffs(ctx context.Context, checkID int64) (CountDiffsRow, error) {
-	row := q.db.QueryRow(ctx, countDiffs, checkID)
-	var i CountDiffsRow
-	err := row.Scan(&i.Changed, &i.Unchanged)
-	return i, err
-}
-
 const getBodyContent = `-- name: GetBodyContent :one
 SELECT content FROM bodies WHERE project_id = $1 AND sha256 = $2
 `
@@ -192,20 +172,22 @@ func (q *Queries) LatestSnapshotOfPage(ctx context.Context, pageID int64) (Lates
 	return i, err
 }
 
-const listChangedPages = `-- name: ListChangedPages :many
-SELECT p.id AS page_id, p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+const listCheckDiffs = `-- name: ListCheckDiffs :many
+SELECT p.id AS page_id, p.url, p.origin, p.state, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
     d.body_changed, d.seo_changes, d.tier,
     COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
-WHERE s.check_id = $1 AND d.tier <> 'empty'
-ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 ELSE 3 END, p.url
+WHERE s.check_id = $1
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url
 `
 
-type ListChangedPagesRow struct {
+type ListCheckDiffsRow struct {
 	PageID         int64
 	Url            string
+	Origin         string
+	State          string
 	SnapshotID     int64
 	StatusChanged  bool
 	HeadersChanged bool
@@ -216,19 +198,23 @@ type ListChangedPagesRow struct {
 	RedirectTarget string
 }
 
-// A Check's non-empty Diffs, most significant first, then by URL.
-func (q *Queries) ListChangedPages(ctx context.Context, checkID int64) ([]ListChangedPagesRow, error) {
-	rows, err := q.db.Query(ctx, listChangedPages, checkID)
+// A Check's Diffs (empty ones too), most significant first, then by URL. The
+// caller leaves out Pages now ignored or excluded and splits changed from
+// unchanged.
+func (q *Queries) ListCheckDiffs(ctx context.Context, checkID int64) ([]ListCheckDiffsRow, error) {
+	rows, err := q.db.Query(ctx, listCheckDiffs, checkID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListChangedPagesRow
+	var items []ListCheckDiffsRow
 	for rows.Next() {
-		var i ListChangedPagesRow
+		var i ListCheckDiffsRow
 		if err := rows.Scan(
 			&i.PageID,
 			&i.Url,
+			&i.Origin,
+			&i.State,
 			&i.SnapshotID,
 			&i.StatusChanged,
 			&i.HeadersChanged,

@@ -47,13 +47,13 @@ type poolRow struct {
 }
 
 func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	s.renderPool(w, r, p, nil)
@@ -106,18 +106,18 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 		filters = append(filters, filterView{f.Key, f.Label, counts[f.Key], f.Key == filter})
 	}
 	data := map[string]any{"Project": p, "Tab": "pages", "Pages": rows, "Filters": filters, "Flash": flash}
-	s.render(w, r, "pages", p.Domain, projectCrumbs(p, false), data)
+	s.render(w, r, "pages", p.Domain, projectCrumbs(p, crumb{Label: "Page pool"}), data)
 }
 
 // addPage adds a Page by hand: any URL on the Project's exact domain.
 func (s *server) addPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	reject := func(msg string) {
@@ -152,7 +152,7 @@ func (s *server) addPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	redirect(w, r, fmt.Sprintf("/p/%d/pages", pg.ProjectID))
+	sendTo(w, r, fmt.Sprintf("/p/%d/pages", pg.ProjectID))
 }
 
 func (s *server) ignorePage(w http.ResponseWriter, r *http.Request) {
@@ -164,13 +164,13 @@ func (s *server) restorePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) setPageState(w http.ResponseWriter, r *http.Request, ignore bool) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	pg, err := s.q.GetPage(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	if ignore && pg.Origin == "seed" {
@@ -187,7 +187,7 @@ func (s *server) setPageState(w http.ResponseWriter, r *http.Request, ignore boo
 		s.fail(w, r, err)
 		return
 	}
-	redirect(w, r, fmt.Sprintf("/pg/%d", id))
+	sendTo(w, r, fmt.Sprintf("/pg/%d", id))
 }
 
 type historyRow struct {
@@ -204,14 +204,14 @@ type historyRow struct {
 }
 
 func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
 	pg, err := s.q.GetPage(ctx, id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	hist, err := s.q.ListPageHistory(ctx, id)
@@ -273,7 +273,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 	if pg.FirstCheckID != 0 {
 		first = fmt.Sprintf("%d", pg.FirstCheckID)
 	}
-	crumbs := append(projectCrumbs(dbgen.Project{ID: pg.ProjectID, Domain: pg.Domain}, true),
+	crumbs := projectCrumbs(dbgen.Project{ID: pg.ProjectID, Domain: pg.Domain},
 		crumb{Label: "Page pool", Href: fmt.Sprintf("/p/%d/pages", pg.ProjectID)}, crumb{Label: pg.Url})
 	s.render(w, r, "pageHistory", "Page history", crumbs, map[string]any{
 		"Page": pg, "State": label, "FirstCheck": first, "History": rows,

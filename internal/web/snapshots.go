@@ -18,14 +18,14 @@ type seoRow struct {
 
 // snapshotPage is the raw Snapshot: what the server sent, as stored.
 func (s *server) snapshotPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
 	snap, err := s.q.GetSnapshotView(ctx, id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 
@@ -83,8 +83,7 @@ func (s *server) snapshotPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	crumbs := append(projectCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, true),
-		crumb{Label: fmt.Sprintf("Check #%d", snap.CheckID), Href: fmt.Sprintf("/c/%d", snap.CheckID)},
+	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckID,
 		crumb{Label: fmt.Sprintf("Snapshot #%d", snap.ID)})
 	s.render(w, r, "snapshot", fmt.Sprintf("Snapshot #%d", snap.ID), crumbs, data)
 }

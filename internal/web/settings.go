@@ -71,7 +71,7 @@ func (s *server) settingsScreenN(w http.ResponseWriter, r *http.Request, p dbgen
 		view := noiseViewOf(n)
 		nv = &view
 	}
-	crumbs := append(projectCrumbs(p, true), crumb{Label: "Settings"})
+	crumbs := projectCrumbs(p, crumb{Label: "Settings"})
 	s.render(w, r, "settings", "Settings · "+p.Domain, crumbs, map[string]any{
 		"Project": p, "Tab": "settings", "S": v, "Schedules": project.Schedules,
 		"UserAgents": project.UserAgentSuggestions, "Errors": flat(errs), "Saved": saved,
@@ -80,13 +80,13 @@ func (s *server) settingsScreenN(w http.ResponseWriter, r *http.Request, p dbgen
 }
 
 func (s *server) settingsPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	rs, err := project.SettingsOf(p)
@@ -98,13 +98,13 @@ func (s *server) settingsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -134,7 +134,7 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 
 // headerRow returns one blank custom header row for the "Add header" button.
 func (s *server) headerRow(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.idParam(w, r); !ok {
+	if _, ok := s.pathID(w, r); !ok {
 		return
 	}
 	s.fragment(w, r, "headerRow", check.Header{})
@@ -153,13 +153,13 @@ func flatNoise(errs project.FieldErrors) []string {
 }
 
 func (s *server) saveNoiseRules(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	if err := r.ParseForm(); err != nil {

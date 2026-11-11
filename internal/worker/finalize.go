@@ -6,6 +6,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 )
@@ -99,7 +100,7 @@ func countOrphans(ctx context.Context, q *dbgen.Queries, checkID int64) error {
 			retired = append(retired, o.ID)
 		}
 	}
-	for kind, ids := range map[string][]int64{"vanished": vanished, "retired": retired} {
+	for kind, ids := range map[string][]int64{page.EventVanished: vanished, page.EventRetired: retired} {
 		if len(ids) == 0 {
 			continue
 		}

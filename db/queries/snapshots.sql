@@ -44,23 +44,18 @@ SELECT s.status, COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redi
 FROM snapshots s JOIN pages p ON p.id = s.page_id
 WHERE s.check_id = $1 AND p.project_id = $2 AND p.url = $3;
 
--- name: ListChangedPages :many
--- A Check's non-empty Diffs, most significant first, then by URL.
-SELECT p.id AS page_id, p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+-- name: ListCheckDiffs :many
+-- A Check's Diffs (empty ones too), most significant first, then by URL. The
+-- caller leaves out Pages now ignored or excluded and splits changed from
+-- unchanged.
+SELECT p.id AS page_id, p.url, p.origin, p.state, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
     d.body_changed, d.seo_changes, d.tier,
     COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
-WHERE s.check_id = $1 AND d.tier <> 'empty'
-ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 ELSE 3 END, p.url;
-
--- name: CountDiffs :one
-SELECT
-    count(*) FILTER (WHERE d.tier <> 'empty')::bigint AS changed,
-    count(*) FILTER (WHERE d.tier = 'empty')::bigint AS unchanged
-FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
-WHERE s.check_id = $1;
+WHERE s.check_id = $1
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url;
 
 -- name: GetDiffBaseline :one
 -- The Snapshot a Snapshot was compared with; no row for a Page's first Snapshot.

@@ -70,6 +70,19 @@ func (q *Queries) CountDroppedURLs(ctx context.Context, checkID int64) (int64, e
 	return column_1, err
 }
 
+const countNewlyDiscoveredPages = `-- name: CountNewlyDiscoveredPages :one
+SELECT count(*)::bigint FROM pages pg JOIN checks c ON c.id = $1
+WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_at >= c.started_at
+`
+
+// Pages the Check's own discovery added to the pool.
+func (q *Queries) CountNewlyDiscoveredPages(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countNewlyDiscoveredPages, id)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countOrphans = `-- name: CountOrphans :many
 UPDATE pages pg
 SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
@@ -492,7 +505,15 @@ const listCheckRows = `-- name: ListCheckRows :many
 SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
+    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier <> 'empty' AND g.state <> 'ignored')::bigint AS changed,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier = 'critical' AND g.state <> 'ignored')::bigint AS critical,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier = 'seo' AND g.state <> 'ignored')::bigint AS seo,
+    EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
+            WHERE f.check_id = c.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS seed_failed
 FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC
 `
 
@@ -521,8 +542,14 @@ type ListCheckRowsRow struct {
 	Known                 int64
 	Fetched               int64
 	Failures              int64
+	Changed               int64
+	Critical              int64
+	Seo                   int64
+	SeedFailed            bool
 }
 
+// The Checks tab: every Check newest first with its progress and, once it has
+// ended, the Report counts. Changed counts leave out Pages now ignored.
 func (q *Queries) ListCheckRows(ctx context.Context, projectID int64) ([]ListCheckRowsRow, error) {
 	rows, err := q.db.Query(ctx, listCheckRows, projectID)
 	if err != nil {
@@ -557,6 +584,10 @@ func (q *Queries) ListCheckRows(ctx context.Context, projectID int64) ([]ListChe
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
+			&i.Changed,
+			&i.Critical,
+			&i.Seo,
+			&i.SeedFailed,
 		); err != nil {
 			return nil, err
 		}
@@ -695,7 +726,7 @@ func (q *Queries) ListInFlightFetches(ctx context.Context, checkID int64) ([]Lis
 
 const listPageEvents = `-- name: ListPageEvents :many
 SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY($2::text[])
+WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY($2::text[])
 ORDER BY pg.url
 `
 
@@ -709,7 +740,8 @@ type ListPageEventsRow struct {
 	Kind string
 }
 
-// The Pages with the event kind in the Check (new includes reactivated).
+// The Pages with the event kind in the Check (new includes reactivated),
+// leaving out Pages now ignored.
 func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) ([]ListPageEventsRow, error) {
 	rows, err := q.db.Query(ctx, listPageEvents, arg.CheckID, arg.Kinds)
 	if err != nil {

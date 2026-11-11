@@ -1,27 +1,21 @@
 package web
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
-	"github.com/ihorbryk/seo-site-checker/internal/diff"
-	redirectpkg "github.com/ihorbryk/seo-site-checker/internal/redirect"
-	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// idParam parses the {id} path value; ok is false (and a 404 written) when it
+// pathID parses the {id} path value; ok is false (and a 404 written) when it
 // is not a positive integer.
-func (s *server) idParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
+func (s *server) pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
 		http.NotFound(w, r)
@@ -30,8 +24,8 @@ func (s *server) idParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// notFoundOr writes a 404 for a missing row and a 500 for any other error.
-func (s *server) notFoundOr(w http.ResponseWriter, r *http.Request, err error) {
+// notFoundOrFail writes a 404 for a missing row and a 500 for any other error.
+func (s *server) notFoundOrFail(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		http.NotFound(w, r)
 		return
@@ -39,8 +33,8 @@ func (s *server) notFoundOr(w http.ResponseWriter, r *http.Request, err error) {
 	s.fail(w, r, err)
 }
 
-// redirect sends the browser to href, through HX-Redirect for htmx requests.
-func redirect(w http.ResponseWriter, r *http.Request, href string) {
+// sendTo sends the browser to href, through HX-Redirect for htmx requests.
+func sendTo(w http.ResponseWriter, r *http.Request, href string) {
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("HX-Redirect", href)
 		return
@@ -59,16 +53,21 @@ type checkRow struct {
 	Known    int64
 	Failures int64
 	Partial  bool
+
+	// Report counts, shown once the Check has ended.
+	Changed, Critical, SEO int64
+	New, Vanished, Retired int64
+	SeedFailed             bool
 }
 
 func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	rows, err := s.q.ListCheckRows(r.Context(), id)
@@ -84,20 +83,23 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 			ID: c.ID, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
 			Started: formatTime(c.StartedAt.Time, c.StartedAt.Valid), Duration: duration(c.StartedAt, c.FinishedAt),
 			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures, Partial: c.State == check.StateCancelled,
+			Changed: c.Changed, Critical: c.Critical, SEO: c.Seo,
+			New: int64(c.CountNew), Vanished: int64(c.CountVanished), Retired: int64(c.CountRetired),
+			SeedFailed: c.SeedFailed,
 		})
 	}
-	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
+	s.render(w, r, "project", p.Domain, projectCrumbs(p, crumb{Label: "Checks"}), map[string]any{
 		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active,
 	})
 }
 
 func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	if _, err := s.q.GetProject(r.Context(), id); err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	c, err := check.Start(r.Context(), s.pool, s.river, id, check.TriggerManual)
@@ -106,35 +108,35 @@ func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// With a Check already active, show its progress instead of a second one.
-	redirect(w, r, fmt.Sprintf("/c/%d", c.ID))
+	sendTo(w, r, fmt.Sprintf("/c/%d", c.ID))
 }
 
 // cancelCheck asks a queued or running Check to stop. Cancelling a Check that
 // is not active does nothing.
 func (s *server) cancelCheck(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	if _, err := s.q.GetCheck(r.Context(), id); err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	if _, err := s.q.RequestCancel(r.Context(), id); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	redirect(w, r, fmt.Sprintf("/c/%d", id))
+	sendTo(w, r, fmt.Sprintf("/c/%d", id))
 }
 
 func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	c, err := s.q.GetCheck(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	p, err := s.q.GetProject(r.Context(), c.ProjectID)
@@ -142,169 +144,44 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	crumbs := append(projectCrumbs(p, true), crumb{Label: fmt.Sprintf("Check #%d", c.ID)})
-	data := map[string]any{
-		"Project": p, "Check": c,
-		"Started": formatTime(c.StartedAt.Time, c.StartedAt.Valid), "Finished": formatTime(c.FinishedAt.Time, c.FinishedAt.Valid),
-		"Duration": duration(c.StartedAt, c.FinishedAt),
-	}
+	crumbs := checkCrumbs(p, c.ID)
+	title := fmt.Sprintf("Check #%d", c.ID)
 	if check.Active(c.State) {
-		prog, err := s.progress(r, c)
+		prog, err := s.loadProgress(r, c)
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
-		data["Progress"] = prog
-		s.render(w, r, "checkRunning", fmt.Sprintf("Check #%d", c.ID), crumbs, data)
+		s.render(w, r, "checkRunning", title, crumbs, map[string]any{
+			"Project": p, "Check": c, "Started": formatTime(c.StartedAt.Time, c.StartedAt.Valid), "Progress": prog,
+		})
 		return
 	}
-	failures, err := s.q.ListFetchFailures(r.Context(), c.ID)
+	data, err := s.buildReport(r, c, p)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	data["Failures"] = failures
-	dropped, err := s.q.CountDroppedURLs(r.Context(), c.ID)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	data["Dropped"] = dropped
-	if c.RobotsFetchedAt.Valid {
-		data["RobotsUnreachable"] = check.RobotsUnreachable(int(c.RobotsStatus.Int32), c.RobotsFailureKind.String)
-		data["RobotsBody"] = string(c.RobotsBody)
-	}
-	if r.URL.Query().Get("show") == "skipped" {
-		skipped, err := s.q.ListSkippedFetches(r.Context(), c.ID)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		data["ShowSkipped"] = true
-		data["Skipped"] = skipped
-	}
-	for _, sec := range []struct {
-		key, id string
-		kinds   []string
-	}{
-		{"New", "new", []string{"new", "reactivated"}},
-		{"Vanished", "vanished", []string{"vanished"}},
-		{"Retired", "retired", []string{"retired"}},
-	} {
-		rows, err := s.q.ListPageEvents(r.Context(), dbgen.ListPageEventsParams{CheckID: c.ID, Kinds: sec.kinds})
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		data[sec.key] = struct {
-			ID   string
-			Rows []dbgen.ListPageEventsRow
-		}{sec.id, rows}
-	}
-	changed, err := s.changedPages(r, c.ID, p.ID, p.Domain)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	data["Changed"] = changed
-	counts, err := s.q.CountDiffs(r.Context(), c.ID)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	data["ChangedCount"], data["UnchangedCount"] = counts.Changed, counts.Unchanged
-	s.render(w, r, "report", fmt.Sprintf("Check #%d", c.ID), crumbs, data)
+	s.render(w, r, "report", title, crumbs, data)
 }
 
-// changedRow is one Page in the Changed Pages section.
-type changedRow struct {
-	SnapshotID int64
-	URL        string
-	Tier       string
-	Badges     []string
-	SEO        []string // "field: before → after"
-	Chain      string   // redirect chain, empty when the Page does not redirect
-}
-
-// checkChain rebuilds the redirect chain starting at url from one Check's
-// Snapshots. Page history shows chains through the same function.
-func (s *server) checkChain(ctx context.Context, checkID, projectID int64, host, url string) (redirectpkg.Chain, error) {
-	var lookupErr error
-	chain := redirectpkg.BuildChain(url, host, func(u string) (redirectpkg.Snap, bool) {
-		row, err := s.q.CheckSnapshotRedirect(ctx, dbgen.CheckSnapshotRedirectParams{CheckID: checkID, ProjectID: projectID, Url: u})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return redirectpkg.Snap{}, false
-		}
-		if err != nil {
-			lookupErr = err
-			return redirectpkg.Snap{}, false
-		}
-		return redirectpkg.Snap{Status: int(row.Status), Target: row.RedirectTarget}, true
-	})
-	return chain, lookupErr
-}
-
-func (s *server) changedPages(r *http.Request, checkID, projectID int64, host string) ([]changedRow, error) {
-	rows, err := s.q.ListChangedPages(r.Context(), checkID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]changedRow, 0, len(rows))
-	for _, d := range rows {
-		row := changedRow{SnapshotID: d.SnapshotID, URL: d.Url, Tier: d.Tier}
-		for _, b := range []struct {
-			on   bool
-			name string
-		}{{d.StatusChanged, "status"}, {d.SeoChanged, "SEO"}, {d.HeadersChanged, "headers"}, {d.BodyChanged, "body"}} {
-			if b.on {
-				row.Badges = append(row.Badges, b.name)
-			}
-		}
-		var changes map[string]diff.SEOChange
-		if err := json.Unmarshal(d.SeoChanges, &changes); err != nil {
-			return nil, err
-		}
-		for _, k := range seo.Keys {
-			if c, ok := changes[k]; ok {
-				row.SEO = append(row.SEO, fmt.Sprintf("%s: %s → %s", k, seoValues(c.Before), seoValues(c.After)))
-			}
-		}
-		if d.RedirectTarget != "" {
-			chain, err := s.checkChain(r.Context(), checkID, projectID, host, d.Url)
-			if err != nil {
-				return nil, err
-			}
-			row.Chain = chain.Label()
-		}
-		out = append(out, row)
-	}
-	return out, nil
-}
-
-func seoValues(vs []string) string {
-	if len(vs) == 0 {
-		return "(none)"
-	}
-	return strings.Join(vs, " | ")
-}
-
-// checkProgress is the htmx fragment polled while a Check runs. Once the
+// progressFragment is the htmx fragment polled while a Check runs. Once the
 // Check has ended it sends the browser to the full page, which is the Report.
-func (s *server) checkProgress(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+func (s *server) progressFragment(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	c, err := s.q.GetCheck(r.Context(), id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	if !check.Active(c.State) {
 		w.Header().Set("HX-Redirect", fmt.Sprintf("/c/%d", c.ID))
 		return
 	}
-	prog, err := s.progress(r, c)
+	prog, err := s.loadProgress(r, c)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -320,10 +197,11 @@ type progressView struct {
 	Fetched    int64
 	Known      int64
 	Failures   int64
+	Discovered int64
 	InFlight   []dbgen.ListInFlightFetchesRow
 }
 
-func (s *server) progress(r *http.Request, c dbgen.Check) (progressView, error) {
+func (s *server) loadProgress(r *http.Request, c dbgen.Check) (progressView, error) {
 	p, err := s.q.CheckProgress(r.Context(), c.ID)
 	if err != nil {
 		return progressView{}, err
@@ -332,19 +210,15 @@ func (s *server) progress(r *http.Request, c dbgen.Check) (progressView, error) 
 	if err != nil {
 		return progressView{}, err
 	}
+	discovered, err := s.q.CountNewlyDiscoveredPages(r.Context(), c.ID)
+	if err != nil {
+		return progressView{}, err
+	}
 	return progressView{
 		CheckID: c.ID, Queued: c.State == check.StateQueued, Cancelling: c.State == check.StateCancelling,
 		Finalizing: c.State == check.StateRunning && p.Fetched == p.Known,
-		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, InFlight: inflight,
+		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, Discovered: discovered, InFlight: inflight,
 	}, nil
-}
-
-func projectCrumbs(p dbgen.Project, link bool) []crumb {
-	cs := []crumb{{Label: "Projects", Href: "/"}}
-	if link {
-		return append(cs, crumb{Label: p.Domain, Href: fmt.Sprintf("/p/%d", p.ID)})
-	}
-	return append(cs, crumb{Label: p.Domain})
 }
 
 func formatTime(t time.Time, valid bool) string {

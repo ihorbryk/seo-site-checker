@@ -70,15 +70,15 @@ SELECT p.*,
     COALESCE(lc.id, 0)::bigint AS last_check_id,
     COALESCE(lc.state, '')::text AS last_check_state,
     COALESCE(rc.id, 0)::bigint AS report_check_id,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
-              WHERE s.check_id = rc.id AND d.tier <> 'empty'), 0)::bigint AS report_changed,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
-              WHERE s.check_id = rc.id AND d.tier = 'critical'), 0)::bigint AS report_critical,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
-              WHERE s.check_id = rc.id AND d.tier = 'seo'), 0)::bigint AS report_seo,
+    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
+              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier <> 'empty'), 0)::bigint AS report_changed,
+    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
+              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier = 'critical'), 0)::bigint AS report_critical,
+    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
+              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier = 'seo'), 0)::bigint AS report_seo,
     COALESCE(rc.count_failures, 0)::bigint AS report_failed,
     EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
-            WHERE f.check_id = rc.id AND g.origin = 'seed' AND f.outcome = 'failure') AS report_seed_failed
+            WHERE f.check_id = rc.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS report_seed_failed
 FROM projects p
 LEFT JOIN LATERAL (SELECT c.id, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
 LEFT JOIN LATERAL (SELECT c.id, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true

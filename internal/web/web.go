@@ -70,7 +70,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.H
 	mux.HandleFunc("POST /pg/{id}/restore", s.restorePage)
 	mux.HandleFunc("GET /c/{id}", s.checkPage)
 	mux.HandleFunc("POST /c/{id}/cancel", s.cancelCheck)
-	mux.HandleFunc("GET /c/{id}/progress", s.checkProgress)
+	mux.HandleFunc("GET /c/{id}/progress", s.progressFragment)
 	mux.HandleFunc("GET /s/{id}", s.snapshotPage)
 	mux.HandleFunc("GET /d/{id}", s.diffPage)
 	return chain(mux, recoverPanics(log), logRequests(log)), nil

@@ -8,7 +8,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
-	"github.com/ihorbryk/seo-site-checker/internal/exclude"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 	projectrules "github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -95,7 +95,7 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 	}
 	var planned []int64
 	for _, pg := range pages {
-		if pg.State == "active" && (pg.Origin == "seed" || !exclude.Excluded(settings.ExcludePatterns, pg.Url)) {
+		if pg.State == page.StateActive && !page.Excluded(settings.ExcludePatterns, pg.Origin, pg.Url) {
 			planned = append(planned, pg.ID)
 		}
 	}

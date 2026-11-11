@@ -119,11 +119,26 @@ WHERE f.check_id = $1 AND f.outcome = 'failure'
 ORDER BY p.url;
 
 -- name: ListCheckRows :many
+-- The Checks tab: every Check newest first with its progress and, once it has
+-- ended, the Report counts. Changed counts leave out Pages now ignored.
 SELECT c.*,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures
+    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier <> 'empty' AND g.state <> 'ignored')::bigint AS changed,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier = 'critical' AND g.state <> 'ignored')::bigint AS critical,
+    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
+     WHERE s.check_id = c.id AND d.tier = 'seo' AND g.state <> 'ignored')::bigint AS seo,
+    EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
+            WHERE f.check_id = c.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS seed_failed
 FROM checks c WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC;
+
+-- name: CountNewlyDiscoveredPages :one
+-- Pages the Check's own discovery added to the pool.
+SELECT count(*)::bigint FROM pages pg JOIN checks c ON c.id = $1
+WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_at >= c.started_at;
 
 -- name: UpsertDiscoveredPages :exec
 -- Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
@@ -246,9 +261,10 @@ UPDATE checks SET
 WHERE id = $1;
 
 -- name: ListPageEvents :many
--- The Pages with the event kind in the Check (new includes reactivated).
+-- The Pages with the event kind in the Check (new includes reactivated),
+-- leaving out Pages now ignored.
 SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[])
+WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY(sqlc.arg(kinds)::text[])
 ORDER BY pg.url;
 
 -- name: ListDueProjects :many

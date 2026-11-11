@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -60,14 +59,14 @@ func (d diffSnapshot) side(s *server, r *http.Request) diff.Side {
 // Snapshot's id. With the htmx header and a diff= mode it returns only the
 // body section, which is what the split/unified toggle swaps in.
 func (s *server) diffPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.idParam(w, r)
+	id, ok := s.pathID(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
 	after, err := s.loadDiffSnapshot(r, id)
 	if err != nil {
-		s.notFoundOr(w, r, err)
+		s.notFoundOrFail(w, r, err)
 		return
 	}
 	snap := after.view
@@ -80,10 +79,7 @@ func (s *server) diffPage(w http.ResponseWriter, r *http.Request) {
 	if u, err := url.Parse(snap.Url); err == nil && u.RequestURI() != "" {
 		path = u.RequestURI()
 	}
-	crumbs := append(projectCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, true),
-		crumb{Label: "Checks", Href: fmt.Sprintf("/p/%d", snap.ProjectID)},
-		crumb{Label: fmt.Sprintf("Check #%d", snap.CheckID), Href: fmt.Sprintf("/c/%d", snap.CheckID)},
-		crumb{Label: "Diff " + path})
+	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckID, crumb{Label: "Diff " + path})
 	data := map[string]any{
 		"After": snap, "Path": path, "AfterFetched": formatTime(snap.FetchedAt, true),
 		// The Check whose frozen Noise rules this Diff used (shown by #31).

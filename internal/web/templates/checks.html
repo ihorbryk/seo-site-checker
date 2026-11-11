@@ -3,12 +3,14 @@
 <form hx-post="/p/{{.Project.ID}}/checks" action="/p/{{.Project.ID}}/checks" method="post" style="margin:12px 0">
 <button class="btn primary">{{if .HasActive}}Show running Check{{else}}Run Check{{end}}</button></form>
 <table id="checks">
-<tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th></tr>
+<tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th><th>Changed</th><th>New</th><th>Vanished</th><th>Retired</th></tr>
 {{range .Checks}}<tr>
-<td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td>{{.Trigger}}</td>
-<td><span class="badge">{{.State}}</span>{{if .Partial}}<span class="badge partial">partial</span>{{end}}{{if .Active}} <span class="live"></span>{{end}}
+<td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td class="c-trigger">{{.Trigger}}</td>
+<td><span class="badge">{{.State}}</span>{{if .Partial}}<span class="badge partial">partial</span>{{end}}{{if .SeedFailed}}<span class="badge seed-failed">seed failed</span>{{end}}{{if .Active}} <span class="live"></span>{{end}}
 {{if .Active}}<form hx-post="/c/{{.ID}}/cancel" action="/c/{{.ID}}/cancel" method="post" style="display:inline"><button class="btn">Cancel</button></form>{{end}}</td>
-<td>{{.Started}}</td><td>{{.Duration}}</td><td>{{.Fetched}} / {{.Known}}</td><td>{{.Failures}}</td>
+<td>{{.Started}}</td><td>{{.Duration}}</td><td>{{.Fetched}} / {{.Known}}</td><td class="c-failed">{{.Failures}}</td>
+{{if .Active}}<td colspan="4" class="muted">running</td>{{else}}<td><b class="c-changed">{{.Changed}}</b>{{if .Critical}} <span class="badge tier tier-critical"><span class="c-critical">{{.Critical}}</span> critical</span>{{else}}<span class="c-critical" hidden>0</span>{{end}}{{if .SEO}} <span class="badge tier tier-seo"><span class="c-seo">{{.SEO}}</span> SEO</span>{{else}}<span class="c-seo" hidden>0</span>{{end}}</td>
+<td class="c-new">{{.New}}</td><td class="c-vanished">{{.Vanished}}</td><td class="c-retired">{{.Retired}}</td>{{end}}
 </tr>{{end}}
 </table>
 {{if not .Checks}}<p class="muted">No Checks yet.</p>{{end}}
@@ -17,7 +19,7 @@
 {{define "progress"}}
 <div id="progress" hx-get="/c/{{.CheckID}}/progress" hx-trigger="every 2s" hx-swap="outerHTML">
 {{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
-<p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed.</p>
+<p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed, <b class="discovered">{{.Discovered}}</b> newly discovered.</p>
 {{end}}
 {{if .Cancelling}}<p class="muted">Cancelling…</p>{{else}}<form hx-post="/c/{{.CheckID}}/cancel" action="/c/{{.CheckID}}/cancel" method="post"><button class="btn">Cancel</button></form>{{end}}
 {{with .InFlight}}<ul class="lanes">{{range .}}<li class="mono">fetching {{.Url}}</li>{{end}}</ul>{{end}}
@@ -39,11 +41,13 @@
 <tr><th>Duration</th><td>{{.Duration}}</td></tr>
 <tr><th>Trigger</th><td>{{.Check.Trigger}}</td></tr>
 <tr><th>Fetched</th><td class="fetched">{{.Check.CountSnapshots}}</td></tr>
-<tr><th>Failed</th><td class="failed">{{.Check.CountFailures}}</td></tr>
-<tr><th>Skipped</th><td class="skipped"><a href="/c/{{.Check.ID}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
+<tr><th>Changed</th><td class="changed">{{.ChangedCount}}</td></tr>
+<tr><th>Unchanged</th><td class="unchanged">{{.UnchangedCount}}</td></tr>
 <tr><th>New Pages</th><td class="new-pages">{{.Check.CountNew}}</td></tr>
 <tr><th>Vanished Pages</th><td class="vanished-count">{{.Check.CountVanished}}</td></tr>
 <tr><th>Retired Pages</th><td class="retired-count">{{.Check.CountRetired}}</td></tr>
+<tr><th>Failed</th><td class="failed">{{.Check.CountFailures}}</td></tr>
+<tr><th>Skipped</th><td class="skipped"><a href="/c/{{.Check.ID}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
 <tr><th>Dropped URLs</th><td class="dropped">{{.Dropped}}</td></tr>
 </table>
 {{if .Check.OrphanCountingSkipped}}<p id="orphan-banner" class="banner">The seed Page was not fetched, so no links were seen: vanished and retired Pages were not counted in this Check.</p>{{end}}
@@ -55,14 +59,7 @@
 </table>{{else}}<p class="muted">None.</p>{{end}}
 {{end}}
 {{if .RobotsBody}}<details id="robots-copy"><summary>robots.txt used by this Check</summary><pre>{{.RobotsBody}}</pre></details>{{end}}
-<h2>New Pages</h2>
-{{template "pageEvents" .New}}
-<h2>Vanished Pages</h2>
-{{template "pageEvents" .Vanished}}
-<h2>Retired Pages</h2>
-{{template "pageEvents" .Retired}}
 <h2>Changed Pages</h2>
-<p id="counts"><b class="changed">{{.ChangedCount}}</b> changed, <b class="unchanged">{{.UnchangedCount}}</b> unchanged</p>
 {{if .Changed}}<table id="changed">
 <tr><th>Page</th><th>Tier</th><th>Changed</th><th>SEO</th></tr>
 {{range .Changed}}<tr><td class="mono"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
@@ -70,6 +67,12 @@
 <td class="badges">{{range .Badges}}<span class="badge">{{.}}</span>{{end}}</td>
 <td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}{{if .Chain}}<div class="chain mono">{{.Chain}}</div>{{end}}</td></tr>{{end}}
 </table>{{end}}
+<h2>New Pages</h2>
+{{template "pageEvents" .New}}
+<h2>Vanished Pages</h2>
+{{template "pageEvents" .Vanished}}
+<h2>Retired Pages</h2>
+{{template "pageEvents" .Retired}}
 <h2>Fetch failures</h2>
 {{if .Failures}}<table id="failures">
 <tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
