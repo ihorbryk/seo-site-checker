@@ -59,7 +59,8 @@ func startOne(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx],
 		}
 		return err
 	}
-	// The schedule clock is the Check's creation time; make it the tick's now.
+	// The schedule clock is the Check's creation time; make it the tick's now
+	// (a deliberate deviation: created_at is the tick time, not the insert time).
 	if err := dbgen.New(tx).SetCheckCreatedAt(ctx, dbgen.SetCheckCreatedAtParams{ID: c.ID, CreatedAt: now}); err != nil {
 		return err
 	}

@@ -2,8 +2,6 @@ package worker
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -11,12 +9,6 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
-	"github.com/ihorbryk/seo-site-checker/internal/diff"
-	"github.com/ihorbryk/seo-site-checker/internal/exclude"
-	"github.com/ihorbryk/seo-site-checker/internal/links"
-	"github.com/ihorbryk/seo-site-checker/internal/redirect"
-	"github.com/ihorbryk/seo-site-checker/internal/seo"
-	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -113,29 +105,11 @@ func (w *laneWorker) advance(ctx context.Context, job *river.Job[check.LaneArgs]
 	}
 
 	rc := river.ClientFromContext[pgx.Tx](ctx)
-	continued := false
-	lanes := chk.Lanes
-	if chk.State == check.StateRunning {
-		next, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
-			JobID: pgtype.Int8{Int64: job.ID, Valid: true}, CheckID: chk.ID,
-		})
-		switch {
-		case err == nil:
-			// The next lane job's id is known only once it is inserted.
-			lane, err := rc.InsertTx(ctx, tx, job.Args, nil)
-			if err != nil {
-				return err
-			}
-			err = q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}})
-			if err != nil {
-				return err
-			}
-			continued = true
-		case errors.Is(err, pgx.ErrNoRows):
-		default:
-			return err
-		}
+	continued, err := continueLane(ctx, rc, tx, q, chk, job)
+	if err != nil {
+		return err
 	}
+	lanes := chk.Lanes
 	if !continued {
 		lanes--
 	} else if raised, err := raiseLanes(ctx, rc, tx, q, chk, job.Args); err != nil {
@@ -158,6 +132,31 @@ func (w *laneWorker) advance(ctx context.Context, job *river.Job[check.LaneArgs]
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// continueLane claims the Check's next pending Fetch for the lane and
+// re-enqueues the lane job to run it. It does nothing, and returns false, when
+// the Check is no longer running or nothing is pending.
+func continueLane(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbgen.Queries, chk dbgen.Check, job *river.Job[check.LaneArgs]) (bool, error) {
+	if chk.State != check.StateRunning {
+		return false, nil
+	}
+	next, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
+		JobID: pgtype.Int8{Int64: job.ID, Valid: true}, CheckID: chk.ID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	// The next lane job's id is known only once it is inserted.
+	lane, err := rc.InsertTx(ctx, tx, job.Args, nil)
+	if err != nil {
+		return false, err
+	}
+	err = q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}})
+	return err == nil, err
 }
 
 // raiseLanes starts extra lanes, each with a Fetch already claimed, while
@@ -188,198 +187,4 @@ func raiseLanes(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbg
 		started++
 	}
 	return started, nil
-}
-
-func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, res fetchResult) error {
-	if res.SkipReason != "" {
-		return q.FinishFetchSkipped(ctx, dbgen.FinishFetchSkippedParams{
-			ID: f.ID, SkipReason: pgtype.Text{String: res.SkipReason, Valid: true},
-		})
-	}
-	dur := pgtype.Int4{Int32: int32(res.Duration.Milliseconds()), Valid: true}
-	if res.FailKind != "" {
-		return q.FinishFetchFailure(ctx, dbgen.FinishFetchFailureParams{
-			ID:          f.ID,
-			FailureKind: pgtype.Text{String: res.FailKind, Valid: true},
-			Message:     pgtype.Text{String: res.FailMsg, Valid: true},
-			DurationMs:  dur,
-		})
-	}
-	prev, err := q.LatestSnapshotOfPage(ctx, f.PageID)
-	hasPrev := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	// A 3xx body is never parsed, diffed or stored; its redirect target is the
-	// Snapshot's content.
-	host := urlnorm.Host(f.Url)
-	target := redirect.Classify(res.Status, res.Headers, f.Url, host)
-	if res.Status >= 300 && res.Status < 400 {
-		res.Body, res.HasBody = nil, false
-	}
-	var sum []byte
-	if res.HasBody {
-		h := sha256.Sum256(res.Body)
-		sum = h[:]
-		err := q.InsertBody(ctx, dbgen.InsertBodyParams{
-			ProjectID: f.ProjectID, Sha256: sum, Content: res.Body, Size: int32(len(res.Body)),
-		})
-		if err != nil {
-			return err
-		}
-	}
-	headers, err := json.Marshal(res.Headers)
-	if err != nil {
-		return err
-	}
-	fields := seo.Extract(seo.Input{
-		Status: res.Status, Headers: res.Headers, Body: res.Body, HasBody: res.HasBody,
-		RedirectTarget: target.URL,
-	})
-	seoFields, err := json.Marshal(fields)
-	if err != nil {
-		return err
-	}
-	err = q.InsertSnapshot(ctx, dbgen.InsertSnapshotParams{
-		ID: f.ID, PageID: f.PageID, CheckID: chk.ID, FetchedAt: time.Now(),
-		Status: int32(res.Status), Headers: headers, BodySha256: sum, SeoFields: seoFields,
-	})
-	if err != nil {
-		return err
-	}
-	if hasPrev {
-		current := diff.Side{Headers: res.Headers, SEO: fields, BodySHA256: sum, LoadBody: func() ([]byte, error) { return res.Body, nil }}
-		if err := storeDiff(ctx, q, chk, f, prev, current); err != nil {
-			return err
-		}
-	}
-	if err := q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: f.ID, DurationMs: dur}); err != nil {
-		return err
-	}
-	switch {
-	case res.HasBody && res.Status >= 200 && res.Status < 300:
-		found, err := links.Extract(res.Body, f.Url, host)
-		if err != nil {
-			return err
-		}
-		return discover(ctx, q, chk, f, found)
-	case target.Kind == redirect.OnDomain:
-		// The only link a 3xx has is its redirect target.
-		found := links.Result{}
-		if reason := urlnorm.Violation(target.URL); reason != "" {
-			found.Dropped = []links.Dropped{{URL: target.URL, Reason: reason}}
-		} else {
-			found.Links = []links.Link{{URL: target.URL, Source: links.SourceRedirect}}
-		}
-		return discover(ctx, q, chk, f, found)
-	}
-	return nil
-}
-
-// discover stores a Snapshot's outgoing links (those of a 2xx HTML page, or a
-// 3xx's redirect target), turns new URLs into discovered Pages with pending
-// Fetches, and records dropped URLs.
-func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, found links.Result) error {
-	// Excluded URLs (by the Check's copy of the patterns) are not added to the
-	// pool and get no Fetch; the seed Page can't be excluded.
-	settings, err := check.ParseSettings(chk.Settings)
-	if err != nil {
-		return err
-	}
-	seed := "https://" + urlnorm.Host(f.Url) + "/"
-	kept := found.Links[:0:0]
-	for _, l := range found.Links {
-		if l.URL == seed || !exclude.Excluded(settings.ExcludePatterns, l.URL) {
-			kept = append(kept, l)
-		}
-	}
-	found.Links = kept
-	if len(found.Links) > 0 {
-		urls := make([]string, 0, len(found.Links))
-		for _, l := range found.Links {
-			urls = append(urls, l.URL)
-		}
-		if err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
-			return err
-		}
-		pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})
-		if err != nil {
-			return err
-		}
-		idOf := make(map[string]int64, len(pages))
-		ids := make([]int64, 0, len(pages))
-		for _, p := range pages {
-			idOf[p.Url] = p.ID
-			ids = append(ids, p.ID)
-		}
-		if err := reactivate(ctx, q, chk.ID, ids); err != nil {
-			return err
-		}
-		if _, err := q.PlanDiscoveredFetches(ctx, dbgen.PlanDiscoveredFetchesParams{CheckID: chk.ID, PageIds: ids}); err != nil {
-			return err
-		}
-		bySource := map[string][]int64{}
-		for _, l := range found.Links {
-			bySource[l.Source] = append(bySource[l.Source], idOf[l.URL])
-		}
-		for source, pageIDs := range bySource {
-			err := q.InsertLinks(ctx, dbgen.InsertLinksParams{SnapshotID: f.ID, Source: source, PageIds: pageIDs})
-			if err != nil {
-				return err
-			}
-		}
-	}
-	byReason := map[string][]string{}
-	for _, d := range found.Dropped {
-		byReason[d.Reason] = append(byReason[d.Reason], d.URL)
-	}
-	for reason, urls := range byReason {
-		if err := q.InsertDroppedURLs(ctx, dbgen.InsertDroppedURLsParams{CheckID: chk.ID, Reason: reason, Urls: urls}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// reactivate brings retired Pages that were linked again back into the pool,
-// before their Fetches are planned. FinalizeCheck records the events.
-func reactivate(ctx context.Context, q *dbgen.Queries, checkID int64, pageIDs []int64) error {
-	return q.ReactivateLinkedPages(ctx, dbgen.ReactivateLinkedPagesParams{CheckID: pgtype.Int8{Int64: checkID, Valid: true}, PageIds: pageIDs})
-}
-
-// storeDiff writes the Diff summary of a new Snapshot against the Page's
-// previous one, under the Noise rules the Check froze when it started.
-func storeDiff(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, prev dbgen.LatestSnapshotOfPageRow, current diff.Side) error {
-	rules, err := diff.ParseRules(chk.NoiseRules)
-	if err != nil {
-		return fmt.Errorf("check noise rules: %w", err)
-	}
-	var prevHeaders [][2]string
-	if err := json.Unmarshal(prev.Headers, &prevHeaders); err != nil {
-		return fmt.Errorf("baseline headers: %w", err)
-	}
-	var prevSEO seo.Fields
-	if err := json.Unmarshal(prev.SeoFields, &prevSEO); err != nil {
-		return fmt.Errorf("baseline seo fields: %w", err)
-	}
-	baseline := diff.Side{
-		Headers: prevHeaders, SEO: prevSEO, BodySHA256: prev.BodySha256,
-		LoadBody: func() ([]byte, error) {
-			return q.GetBodyContent(ctx, dbgen.GetBodyContentParams{ProjectID: f.ProjectID, Sha256: prev.BodySha256})
-		},
-	}
-	sum, err := diff.Summarize(baseline, current, rules)
-	if err != nil {
-		return err
-	}
-	changes, err := json.Marshal(sum.SEOChanges)
-	if err != nil {
-		return err
-	}
-	return q.InsertDiff(ctx, dbgen.InsertDiffParams{
-		SnapshotID: f.ID, BaselineID: prev.ID,
-		StatusChanged: sum.StatusChanged, HeadersChanged: sum.HeadersChanged,
-		SeoChanged: sum.SEOChanged, BodyChanged: sum.BodyChanged,
-		SeoChanges: changes, Tier: string(sum.Tier),
-	})
 }

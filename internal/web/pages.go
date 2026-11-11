@@ -8,31 +8,35 @@ import (
 	"strings"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
-	"github.com/ihorbryk/seo-site-checker/internal/exclude"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
 )
 
-// maxOrphanStreak is the number of orphaned Checks that retires a Page.
-const maxOrphanStreak = 3
-
 // poolFilters are the Page pool tab's filters, in display order; "" is all.
 var poolFilters = []struct{ Key, Label string }{
-	{"", "All"}, {"active", "Active"}, {"orphaned", "Orphaned"},
-	{"retired", "Retired"}, {"ignored", "Ignored"}, {"excluded", "Excluded"},
+	{"", "All"}, {page.StateActive, "Active"}, {"orphaned", "Orphaned"},
+	{page.StateRetired, "Retired"}, {page.StateIgnored, "Ignored"}, {"excluded", "Excluded"},
+}
+
+// pagePoolState is what poolState needs to classify a Page.
+type pagePoolState struct {
+	State, Origin, URL string
+	OrphanStreak       int32
+	ExcludePatterns    []string
 }
 
 // poolState classifies a Page for display: the filter key it belongs to
 // (orphaned Pages are also active; excluded ones are not) and its label.
 // Exclusion is computed on render, never stored; the seed Page is never excluded.
-func poolState(state, origin string, orphanStreak int32, patterns []string, pageURL string) (key, label string) {
+func poolState(pg pagePoolState) (key, label string) {
 	switch {
-	case state == "active" && origin != "seed" && exclude.Excluded(patterns, pageURL):
+	case pg.State == page.StateActive && page.Excluded(pg.ExcludePatterns, pg.Origin, pg.URL):
 		return "excluded", "matches exclude pattern"
-	case state == "active" && orphanStreak > 0:
-		return "orphaned", fmt.Sprintf("orphaned %d/%d", orphanStreak, maxOrphanStreak)
+	case pg.State == page.StateActive && pg.OrphanStreak > 0:
+		return "orphaned", fmt.Sprintf("orphaned %d/%d", pg.OrphanStreak, page.RetireAfter)
 	default:
-		return state, state
+		return pg.State, pg.State
 	}
 }
 
@@ -78,13 +82,13 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 	counts := map[string]int{}
 	rows := make([]poolRow, 0, len(pages))
 	for _, pg := range pages {
-		key, label := poolState(pg.State, pg.Origin, pg.OrphanStreak, p.ExcludePatterns, pg.Url)
+		key, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: p.ExcludePatterns})
 		counts[""]++
 		counts[key]++
 		if key == "orphaned" {
-			counts["active"]++
+			counts[page.StateActive]++
 		}
-		if filter != "" && key != filter && !(filter == "active" && key == "orphaned") {
+		if filter != "" && key != filter && !(filter == page.StateActive && key == "orphaned") {
 			continue
 		}
 		row := poolRow{
@@ -173,7 +177,7 @@ func (s *server) setPageState(w http.ResponseWriter, r *http.Request, ignore boo
 		s.notFoundOrFail(w, r, err)
 		return
 	}
-	if ignore && pg.Origin == "seed" {
+	if ignore && pg.Origin == page.OriginSeed {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		s.fragment(w, r, "flash", map[string]any{"Err": true, "Message": "The seed Page cannot be ignored."})
 		return
@@ -268,7 +272,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	_, label := poolState(pg.State, pg.Origin, pg.OrphanStreak, pg.ExcludePatterns, pg.Url)
+	_, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: pg.ExcludePatterns})
 	first := ""
 	if pg.FirstCheckID != 0 {
 		first = fmt.Sprintf("%d", pg.FirstCheckID)
@@ -277,7 +281,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 		crumb{Label: "Page pool", Href: fmt.Sprintf("/p/%d/pages", pg.ProjectID)}, crumb{Label: pg.Url})
 	s.render(w, r, "pageHistory", "Page history", crumbs, map[string]any{
 		"Page": pg, "State": label, "FirstCheck": first, "History": rows,
-		"CanIgnore":  pg.Origin != "seed" && pg.State != "ignored",
-		"CanRestore": pg.State == "ignored",
+		"CanIgnore":  pg.Origin != page.OriginSeed && pg.State != page.StateIgnored,
+		"CanRestore": pg.State == page.StateIgnored,
 	})
 }

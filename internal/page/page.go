@@ -27,6 +27,10 @@ const (
 	EventReactivated = "reactivated"
 )
 
+// RetireAfter is how many consecutive orphaned Checks retire a discovered
+// Page. It mirrors the constant in the CountOrphans query.
+const RetireAfter = 3
+
 // Excluded reports whether a Page of the given origin matches one of the
 // exclude patterns. The seed Page is never excluded, whatever the patterns say.
 // Exclusion is computed, never stored.

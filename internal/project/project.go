@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/net/idna"
@@ -104,7 +105,7 @@ func AddWithSchedule(ctx context.Context, db Beginner, input, schedule string) (
 		return dbgen.Project{}, err
 	}
 	if _, err := q.CreatePage(ctx, dbgen.CreatePageParams{
-		ProjectID: p.ID, Url: "https://" + domain + "/", Origin: "seed",
+		ProjectID: p.ID, Url: "https://" + domain + "/", Origin: page.OriginSeed,
 	}); err != nil {
 		return dbgen.Project{}, err
 	}

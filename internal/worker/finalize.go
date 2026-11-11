@@ -96,7 +96,7 @@ func countOrphans(ctx context.Context, q *dbgen.Queries, checkID int64) error {
 		if o.OrphanStreak == 1 {
 			vanished = append(vanished, o.ID)
 		}
-		if o.OrphanStreak >= RetireAfter {
+		if o.OrphanStreak >= page.RetireAfter {
 			retired = append(retired, o.ID)
 		}
 	}
@@ -110,7 +110,3 @@ func countOrphans(ctx context.Context, q *dbgen.Queries, checkID int64) error {
 	}
 	return nil
 }
-
-// RetireAfter is how many consecutive orphaned Checks retire a Page. It
-// mirrors the constant in the CountOrphans query.
-const RetireAfter = 3
