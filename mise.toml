@@ -118,15 +118,34 @@ daemons = ["postgres"]
 run = 'psql "$DATABASE_URL"'
 
 [tasks.lint]
-description = "gofmt, go vet, sqlc freshness, go mod tidy diff"
+description = "Every lint step: fmt, vet, sqlc, tidy, literals"
+depends = ["lint:fmt", "lint:vet", "lint:sqlc", "lint:tidy", "lint:literals"]
+
+[tasks."lint:fmt"]
+description = "gofmt reports no unformatted files"
+run = 'test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }'
+
+[tasks."lint:vet"]
+description = "go vet ./..."
+run = "go vet ./..."
+
+[tasks."lint:sqlc"]
+description = "Regenerate sqlc and fail if internal/dbgen differs from the working tree"
 run = '''
-test -z "$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
-go vet ./...
 sqlc generate
 git diff --exit-code -- internal/dbgen
+'''
+
+[tasks."lint:tidy"]
+description = "go mod tidy and fail if go.mod or go.sum change"
+run = '''
 go mod tidy
 git diff --exit-code -- go.mod go.sum
 '''
+
+[tasks."lint:literals"]
+description = "Page state, origin and event kinds use internal/page constants, not string literals"
+run = "go run ./internal/tools/pageliterals"
 
 [tasks.test]
 description = "go test -race ./... against DATABASE_URL (CI, or a shared Postgres)"
