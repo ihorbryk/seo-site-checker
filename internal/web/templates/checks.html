@@ -1,6 +1,5 @@
 {{define "project"}}
-<h1>{{.Project.Domain}}</h1>
-<nav class="tabs"><b>Checks</b></nav>
+{{template "tabs" .}}
 <form hx-post="/p/{{.Project.ID}}/checks" action="/p/{{.Project.ID}}/checks" method="post" style="margin:12px 0">
 <button class="btn primary">{{if .HasActive}}Show running Check{{else}}Run Check{{end}}</button></form>
 <table id="checks">

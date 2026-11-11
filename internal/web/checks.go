@@ -80,7 +80,7 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, r, "project", p.Domain, projectCrumbs(p, false), map[string]any{
-		"Project": p, "Checks": checks, "HasActive": active,
+		"Project": p, "Tab": "checks", "Checks": checks, "HasActive": active,
 	})
 }
 
