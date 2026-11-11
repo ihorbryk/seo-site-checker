@@ -7,6 +7,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/diff"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
@@ -51,6 +52,10 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 	if err != nil {
 		return err
 	}
+	rawRules, err := diff.BuiltinRules().JSON() // per-Project Noise rules join these later
+	if err != nil {
+		return err
+	}
 	pending, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID})
 	if err != nil {
 		return err
@@ -75,7 +80,7 @@ func (w *startWorker) Work(ctx context.Context, job *river.Job[check.StartCheckA
 		}
 	}
 	err = q.MarkCheckRunning(ctx, dbgen.MarkCheckRunningParams{
-		ID: c.ID, Settings: rawSettings, NoiseRules: []byte("[]"), Lanes: int32(lanes),
+		ID: c.ID, Settings: rawSettings, NoiseRules: rawRules, Lanes: int32(lanes),
 	})
 	if err != nil {
 		return err
