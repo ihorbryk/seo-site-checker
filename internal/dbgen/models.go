@@ -84,6 +84,17 @@ type Check struct {
 	CountSkipped          int32
 }
 
+type Diff struct {
+	SnapshotID     int64
+	BaselineID     int64
+	StatusChanged  bool
+	HeadersChanged bool
+	SeoChanged     bool
+	BodyChanged    bool
+	SeoChanges     []byte
+	Tier           string
+}
+
 type Fetch struct {
 	ID          int64
 	CheckID     int64

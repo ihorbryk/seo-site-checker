@@ -31,6 +31,8 @@ func BuiltinRules() Rules {
 	for _, h := range []string{
 		"Date", "Age", "Expires", "Set-Cookie", "ETag", "Last-Modified",
 		"CF-Ray", "X-Request-Id", "Server-Timing", "Report-To", "NEL",
+		// Follows the body, so a body-only change would otherwise rank as headers.
+		"Content-Length",
 	} {
 		rs = append(rs, Rule{Kind: KindHeader, Value: h})
 	}

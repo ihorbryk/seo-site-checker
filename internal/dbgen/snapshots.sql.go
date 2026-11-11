@@ -12,6 +12,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countDiffs = `-- name: CountDiffs :one
+SELECT
+    count(*) FILTER (WHERE d.tier <> 'empty')::bigint AS changed,
+    count(*) FILTER (WHERE d.tier = 'empty')::bigint AS unchanged
+FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id
+WHERE s.check_id = $1
+`
+
+type CountDiffsRow struct {
+	Changed   int64
+	Unchanged int64
+}
+
+func (q *Queries) CountDiffs(ctx context.Context, checkID int64) (CountDiffsRow, error) {
+	row := q.db.QueryRow(ctx, countDiffs, checkID)
+	var i CountDiffsRow
+	err := row.Scan(&i.Changed, &i.Unchanged)
+	return i, err
+}
+
 const getBodyContent = `-- name: GetBodyContent :one
 SELECT content FROM bodies WHERE project_id = $1 AND sha256 = $2
 `
@@ -77,6 +97,115 @@ func (q *Queries) GetSnapshotView(ctx context.Context, id int64) (GetSnapshotVie
 		&i.BodySize,
 	)
 	return i, err
+}
+
+const insertDiff = `-- name: InsertDiff :exec
+INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, seo_changes, tier)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertDiffParams struct {
+	SnapshotID     int64
+	BaselineID     int64
+	StatusChanged  bool
+	HeadersChanged bool
+	SeoChanged     bool
+	BodyChanged    bool
+	SeoChanges     []byte
+	Tier           string
+}
+
+func (q *Queries) InsertDiff(ctx context.Context, arg InsertDiffParams) error {
+	_, err := q.db.Exec(ctx, insertDiff,
+		arg.SnapshotID,
+		arg.BaselineID,
+		arg.StatusChanged,
+		arg.HeadersChanged,
+		arg.SeoChanged,
+		arg.BodyChanged,
+		arg.SeoChanges,
+		arg.Tier,
+	)
+	return err
+}
+
+const latestSnapshotOfPage = `-- name: LatestSnapshotOfPage :one
+SELECT id, headers, seo_fields, body_sha256 FROM snapshots
+WHERE page_id = $1
+ORDER BY fetched_at DESC, id DESC LIMIT 1
+`
+
+type LatestSnapshotOfPageRow struct {
+	ID         int64
+	Headers    []byte
+	SeoFields  []byte
+	BodySha256 []byte
+}
+
+// The Page's newest Snapshot: the baseline for the one about to be stored.
+func (q *Queries) LatestSnapshotOfPage(ctx context.Context, pageID int64) (LatestSnapshotOfPageRow, error) {
+	row := q.db.QueryRow(ctx, latestSnapshotOfPage, pageID)
+	var i LatestSnapshotOfPageRow
+	err := row.Scan(
+		&i.ID,
+		&i.Headers,
+		&i.SeoFields,
+		&i.BodySha256,
+	)
+	return i, err
+}
+
+const listChangedPages = `-- name: ListChangedPages :many
+SELECT p.id AS page_id, p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+    d.body_changed, d.seo_changes, d.tier
+FROM diffs d
+JOIN snapshots s ON s.id = d.snapshot_id
+JOIN pages p ON p.id = s.page_id
+WHERE s.check_id = $1 AND d.tier <> 'empty'
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 ELSE 3 END, p.url
+`
+
+type ListChangedPagesRow struct {
+	PageID         int64
+	Url            string
+	SnapshotID     int64
+	StatusChanged  bool
+	HeadersChanged bool
+	SeoChanged     bool
+	BodyChanged    bool
+	SeoChanges     []byte
+	Tier           string
+}
+
+// A Check's non-empty Diffs, most significant first, then by URL.
+func (q *Queries) ListChangedPages(ctx context.Context, checkID int64) ([]ListChangedPagesRow, error) {
+	rows, err := q.db.Query(ctx, listChangedPages, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChangedPagesRow
+	for rows.Next() {
+		var i ListChangedPagesRow
+		if err := rows.Scan(
+			&i.PageID,
+			&i.Url,
+			&i.SnapshotID,
+			&i.StatusChanged,
+			&i.HeadersChanged,
+			&i.SeoChanged,
+			&i.BodyChanged,
+			&i.SeoChanges,
+			&i.Tier,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const nextSnapshotID = `-- name: NextSnapshotID :one
