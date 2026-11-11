@@ -3,13 +3,6 @@ INSERT INTO projects (domain, schedule)
 VALUES (sqlc.arg(domain), sqlc.arg(schedule))
 RETURNING *;
 
--- name: ListProjectsWithActivePages :many
-SELECT
-    p.*,
-    (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages
-FROM projects p
-ORDER BY p.domain;
-
 -- name: ListProjects :many
 SELECT * FROM projects ORDER BY domain;
 

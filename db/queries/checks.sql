@@ -205,16 +205,6 @@ SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
 WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[])
 ORDER BY pg.url;
 
--- name: ListPagePool :many
--- last_status is 0 for a Page with no Snapshot yet.
-SELECT pg.id, pg.url, pg.state, pg.origin, COALESCE(last.status, 0)::int AS last_status
-FROM pages pg
-LEFT JOIN LATERAL (
-    SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
-    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
-) last ON true
-WHERE pg.project_id = $1 ORDER BY pg.url;
-
 -- name: ListDueProjects :many
 -- Projects whose schedule is due at now: not manual, no active Check, and no
 -- scheduled Check yet or the last one's creation time + interval <= now.

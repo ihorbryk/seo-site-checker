@@ -654,51 +654,6 @@ func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) 
 	return items, nil
 }
 
-const listPagePool = `-- name: ListPagePool :many
-SELECT pg.id, pg.url, pg.state, pg.origin, COALESCE(last.status, 0)::int AS last_status
-FROM pages pg
-LEFT JOIN LATERAL (
-    SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
-    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1
-) last ON true
-WHERE pg.project_id = $1 ORDER BY pg.url
-`
-
-type ListPagePoolRow struct {
-	ID         int64
-	Url        string
-	State      string
-	Origin     string
-	LastStatus int32
-}
-
-// last_status is 0 for a Page with no Snapshot yet.
-func (q *Queries) ListPagePool(ctx context.Context, projectID int64) ([]ListPagePoolRow, error) {
-	rows, err := q.db.Query(ctx, listPagePool, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPagePoolRow
-	for rows.Next() {
-		var i ListPagePoolRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Url,
-			&i.State,
-			&i.Origin,
-			&i.LastStatus,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockCheck = `-- name: LockCheck :one
 SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired FROM checks WHERE id = $1 FOR UPDATE
 `

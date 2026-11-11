@@ -1,9 +1,13 @@
 {{define "home"}}
 <h1>Projects</h1>
 <table>
-<tr><th>Domain</th><th>Schedule</th><th>Pages</th></tr>
+<tr><th>Domain</th><th>Schedule</th><th>Pages</th><th>Last Check</th><th>Last Report</th></tr>
 {{range .Projects}}<tr>
-<td><a href="/p/{{.ID}}"><b>{{.Domain}}</b></a></td><td>{{.Schedule}}</td><td>{{.ActivePages}} active</td>
+<td><a href="/p/{{.ID}}"><b>{{.Domain}}</b></a></td><td>{{.Schedule}}</td><td class="active-pages">{{.ActivePages}} active</td>
+<td class="last-check">{{if .LastCheckID}}<a href="/c/{{.LastCheckID}}">#{{.LastCheckID}}</a> <span class="badge">{{.LastCheckState}}</span>{{if or (eq .LastCheckState "queued") (eq .LastCheckState "running") (eq .LastCheckState "cancelling")}} <span class="live"></span>{{end}}{{else}}<span class="muted">never</span>{{end}}</td>
+<td>{{if .ReportCheckID}}<a href="/c/{{.ReportCheckID}}">#{{.ReportCheckID}}</a>:
+<b class="r-changed">{{.ReportChanged}}</b> changed, <b class="r-critical">{{.ReportCritical}}</b> critical, <b class="r-seo">{{.ReportSeo}}</b> SEO,
+<b class="r-failed">{{.ReportFailed}}</b> failed, <b class="r-seed-failed">{{if .ReportSeedFailed}}1{{else}}0{{end}}</b> seed failed{{else}}<span class="muted">—</span>{{end}}</td>
 </tr>{{end}}
 </table>
 {{template "newProject"}}
