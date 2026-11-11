@@ -58,6 +58,21 @@ func TestExtractGolden(t *testing.T) {
 	}
 }
 
+func TestExtractRedirectTargetIsTheClassifiedLocationAndBodyIsNeverParsed(t *testing.T) {
+	f := Extract(Input{Status: 301, RedirectTarget: "https://shop.test/new"})
+	if got := f["redirect_target"]; len(got) != 1 || got[0] != "https://shop.test/new" {
+		t.Errorf("redirect_target = %v", got)
+	}
+	// A 3xx body is never parsed: the HTML fields stay empty even if a body is given.
+	f = Extract(Input{Status: 301, RedirectTarget: "https://shop.test/new", Body: []byte("<title>moved</title>"), HasBody: true, Headers: [][2]string{{"Content-Type", "text/html"}}})
+	if len(f["title"]) != 0 {
+		t.Errorf("title = %v, want none for a 3xx", f["title"])
+	}
+	if got := Extract(Input{Status: 200})["redirect_target"]; len(got) != 0 {
+		t.Errorf("redirect_target on 200 = %v", got)
+	}
+}
+
 func TestExtractNonHTMLHasEmptyListsNotNull(t *testing.T) {
 	f := Extract(Input{Status: 200, Headers: [][2]string{{"Content-Type", "application/json"}}})
 	for _, k := range Keys {

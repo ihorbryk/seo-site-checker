@@ -29,11 +29,15 @@ type Input struct {
 	Headers [][2]string // in stored order
 	Body    []byte      // HTML responses only
 	HasBody bool
+
+	// RedirectTarget is the resolved, normalised Location of a 3xx, as
+	// classified by the redirect package; empty when there is none.
+	RedirectTarget string
 }
 
 // Extract reads the SEO fields from a response. The HTML fields stay empty
-// when there is no body. redirect_target is filled in by the redirects
-// ticket and stays empty until then.
+// when there is no body or the status is 3xx. redirect_target is the
+// classified Location the caller passes in.
 //
 // Meta robots values are written "name: content", with the lower-cased meta
 // name, so bot-specific tags (googlebot, bingbot, ...) stay apart from the
@@ -52,7 +56,11 @@ func Extract(in Input) Fields {
 			f["x_robots_tag"] = append(f["x_robots_tag"], collapse(h[1]))
 		}
 	}
-	if !in.HasBody {
+	if in.RedirectTarget != "" {
+		f["redirect_target"] = []string{in.RedirectTarget}
+	}
+	// A 3xx body is never parsed.
+	if !in.HasBody || (in.Status >= 300 && in.Status < 400) {
 		return f
 	}
 

@@ -12,6 +12,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const checkSnapshotRedirect = `-- name: CheckSnapshotRedirect :one
+SELECT s.status, COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
+FROM snapshots s JOIN pages p ON p.id = s.page_id
+WHERE s.check_id = $1 AND p.project_id = $2 AND p.url = $3
+`
+
+type CheckSnapshotRedirectParams struct {
+	CheckID   int64
+	ProjectID int64
+	Url       string
+}
+
+type CheckSnapshotRedirectRow struct {
+	Status         int32
+	RedirectTarget string
+}
+
+// A Page's Snapshot in one Check, reduced to what redirect chains need.
+func (q *Queries) CheckSnapshotRedirect(ctx context.Context, arg CheckSnapshotRedirectParams) (CheckSnapshotRedirectRow, error) {
+	row := q.db.QueryRow(ctx, checkSnapshotRedirect, arg.CheckID, arg.ProjectID, arg.Url)
+	var i CheckSnapshotRedirectRow
+	err := row.Scan(&i.Status, &i.RedirectTarget)
+	return i, err
+}
+
 const countDiffs = `-- name: CountDiffs :one
 SELECT
     count(*) FILTER (WHERE d.tier <> 'empty')::bigint AS changed,
@@ -169,7 +194,8 @@ func (q *Queries) LatestSnapshotOfPage(ctx context.Context, pageID int64) (Lates
 
 const listChangedPages = `-- name: ListChangedPages :many
 SELECT p.id AS page_id, p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
-    d.body_changed, d.seo_changes, d.tier
+    d.body_changed, d.seo_changes, d.tier,
+    COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
@@ -187,6 +213,7 @@ type ListChangedPagesRow struct {
 	BodyChanged    bool
 	SeoChanges     []byte
 	Tier           string
+	RedirectTarget string
 }
 
 // A Check's non-empty Diffs, most significant first, then by URL.
@@ -209,6 +236,7 @@ func (q *Queries) ListChangedPages(ctx context.Context, checkID int64) ([]ListCh
 			&i.BodyChanged,
 			&i.SeoChanges,
 			&i.Tier,
+			&i.RedirectTarget,
 		); err != nil {
 			return nil, err
 		}

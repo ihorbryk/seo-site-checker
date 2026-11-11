@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/diff"
+	redirectpkg "github.com/ihorbryk/seo-site-checker/internal/redirect"
 	"github.com/ihorbryk/seo-site-checker/internal/seo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -199,7 +201,7 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 			Rows []dbgen.ListPageEventsRow
 		}{sec.id, rows}
 	}
-	changed, err := s.changedPages(r, c.ID)
+	changed, err := s.changedPages(r, c.ID, p.ID, p.Domain)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -221,9 +223,28 @@ type changedRow struct {
 	Tier       string
 	Badges     []string
 	SEO        []string // "field: before → after"
+	Chain      string   // redirect chain, empty when the Page does not redirect
 }
 
-func (s *server) changedPages(r *http.Request, checkID int64) ([]changedRow, error) {
+// checkChain rebuilds the redirect chain starting at url from one Check's
+// Snapshots. Page history shows chains through the same function.
+func (s *server) checkChain(ctx context.Context, checkID, projectID int64, host, url string) (redirectpkg.Chain, error) {
+	var lookupErr error
+	chain := redirectpkg.BuildChain(url, host, func(u string) (redirectpkg.Snap, bool) {
+		row, err := s.q.CheckSnapshotRedirect(ctx, dbgen.CheckSnapshotRedirectParams{CheckID: checkID, ProjectID: projectID, Url: u})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return redirectpkg.Snap{}, false
+		}
+		if err != nil {
+			lookupErr = err
+			return redirectpkg.Snap{}, false
+		}
+		return redirectpkg.Snap{Status: int(row.Status), Target: row.RedirectTarget}, true
+	})
+	return chain, lookupErr
+}
+
+func (s *server) changedPages(r *http.Request, checkID, projectID int64, host string) ([]changedRow, error) {
 	rows, err := s.q.ListChangedPages(r.Context(), checkID)
 	if err != nil {
 		return nil, err
@@ -247,6 +268,13 @@ func (s *server) changedPages(r *http.Request, checkID int64) ([]changedRow, err
 			if c, ok := changes[k]; ok {
 				row.SEO = append(row.SEO, fmt.Sprintf("%s: %s → %s", k, seoValues(c.Before), seoValues(c.After)))
 			}
+		}
+		if d.RedirectTarget != "" {
+			chain, err := s.checkChain(r.Context(), checkID, projectID, host, d.Url)
+			if err != nil {
+				return nil, err
+			}
+			row.Chain = chain.Label()
 		}
 		out = append(out, row)
 	}
