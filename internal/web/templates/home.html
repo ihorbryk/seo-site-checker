@@ -1,21 +1,23 @@
 {{define "home"}}
 <h1>Projects</h1>
-<table>
+<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+<table class="table table-sm">
 <tr><th>Domain</th><th>Schedule</th><th>Pages</th><th>Last Check</th><th>Last Report</th></tr>
+
 {{range .Projects}}<tr>
-<td><a href="/p/{{.ID}}"><b>{{.Domain}}</b></a></td><td>{{.Schedule}}</td><td class="active-pages">{{.ActivePages}} active</td>
-<td class="last-check">{{if .LastCheckID}}<a href="/c/{{.LastCheckID}}">#{{.LastCheckID}}</a> <span class="badge">{{.LastCheckState}}</span>{{if or (eq .LastCheckState "queued") (eq .LastCheckState "running") (eq .LastCheckState "cancelling")}} <span class="live"></span>{{end}}{{else}}<span class="muted">never</span>{{end}}</td>
+<td><a href="/p/{{.ID}}" class="font-semibold">{{.Domain}}</a></td><td>{{.Schedule}}</td><td class="active-pages">{{.ActivePages}} active</td>
+<td class="last-check">{{if .LastCheckID}}<a href="/c/{{.LastCheckID}}">#{{.LastCheckID}}</a> {{template "checkState" .LastCheckState}}{{if or (eq .LastCheckState "queued") (eq .LastCheckState "running") (eq .LastCheckState "cancelling")}} {{template "live"}}{{end}}{{else}}<span class="text-base-content/60">never</span>{{end}}</td>
 <td>{{if .ReportCheckID}}<a href="/c/{{.ReportCheckID}}">#{{.ReportCheckID}}</a>:
-<b class="r-changed">{{.ReportChanged}}</b> changed, <b class="r-critical">{{.ReportCritical}}</b> critical, <b class="r-seo">{{.ReportSeo}}</b> SEO,
-<b class="r-failed">{{.ReportFailed}}</b> failed, <b class="r-seed-failed">{{if .ReportSeedFailed}}1{{else}}0{{end}}</b> seed failed{{else}}<span class="muted">—</span>{{end}}</td>
+<b class="r-changed">{{.ReportChanged}}</b> changed, <b class="r-critical {{if .ReportCritical}}text-error{{end}}">{{.ReportCritical}}</b> critical, <b class="r-seo {{if .ReportSeo}}text-warning{{end}}">{{.ReportSeo}}</b> SEO,
+<b class="r-failed {{if .ReportFailed}}text-error{{end}}">{{.ReportFailed}}</b> failed, <b class="r-seed-failed">{{if .ReportSeedFailed}}1{{else}}0{{end}}</b> seed failed{{else}}<span class="text-base-content/60">—</span>{{end}}</td>
 </tr>{{end}}
+
 </table>
+</div>
 {{template "newProject"}}
 {{end}}
 
 {{define "newProject"}}
-<form hx-post="/projects" hx-target="#np" action="/projects" method="post" style="margin-top:16px;display:flex;gap:6px;align-items:center">
-<input type="text" name="domain" placeholder="example.com — one exact host, https only" style="max-width:340px"><button class="btn primary">Add Project</button><span id="np"></span></form>
+<form hx-post="/projects" hx-target="#np" action="/projects" method="post" class="mt-4 flex flex-wrap items-center gap-2">
+<input type="text" name="domain" placeholder="example.com — one exact host, https only" class="input input-sm w-full max-w-sm"><button class="btn btn-sm btn-primary">Add Project</button><span id="np"></span></form>
 {{end}}
-
-{{define "flash"}}<div class="flash{{if .Err}} err{{end}}">{{.Message}}</div>{{end}}

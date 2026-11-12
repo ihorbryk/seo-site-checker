@@ -31,11 +31,18 @@ and `DROP DATABASE` each.
 - **sqlc**: queries live in `db/queries/*.sql`. When `internal/dbgen` conflicts
   in a merge or rebase, resolve the `.sql` sources, then run `mise run gen`;
   regenerated output replaces the conflicted files.
+- **CSS** (ADR 0004): templates use Tailwind v4 + daisyUI 5.7.50 classes.
+  `internal/web/css/input.css` is the source; `mise run css` builds the
+  committed `internal/web/static/app.css`, and the `css` daemon rebuilds it on
+  template changes. Upgrade daisyUI with `mise run css:daisyui <version>` and
+  update the version here. Semantic classes and ids next to the daisyUI ones
+  (`.fetched`, `.tier`, `#body-diff`, ...) are systemtest hooks: keep them, and
+  keep header rows as plain `<tr>`s since tests count rows by position.
 - **Lint**: `mise run lint` runs `lint:fmt`, `lint:vet`, `lint:sqlc`,
-  `lint:tidy` and `lint:literals`; run one by name to see only its output.
-  `lint:sqlc` and `lint:tidy` compare against the working tree with
-  `git diff`, so commit regenerated `internal/dbgen` (and `go.mod`/`go.sum`)
-  before `mise run lint`.
+  `lint:tidy`, `lint:literals` and `lint:css`; run one by name to see only its
+  output. `lint:sqlc`, `lint:tidy` and `lint:css` compare against the working
+  tree with `git diff`, so commit regenerated `internal/dbgen`,
+  `go.mod`/`go.sum` and `app.css` before `mise run lint`.
 - **Guards**: `lint:literals` rejects Page state, origin and event string
   literals outside `internal/page`; mark a same-spelling literal with
   `// pageliterals:ok <reason>`. `internal/worker` has a test that only

@@ -1,5 +1,5 @@
-{{define "pager"}}<nav class="pager">
-{{if .Multi}}<span class="pages">{{if .PrevHref}}<a class="prev" href="{{.PrevHref}}">‹ Prev</a>{{else}}<span class="prev muted">‹ Prev</span>{{end}} · <span class="page-of">Page {{.Page}} of {{.Last}}</span> · {{if .NextHref}}<a class="next" href="{{.NextHref}}">Next ›</a>{{else}}<span class="next muted">Next ›</span>{{end}}</span>{{end}}
-<span class="rows muted">{{.Rows}}</span>
-<span class="per">Rows per page: {{range .Sizes}}{{if .Current}}<b>{{.Per}}</b>{{else}}<a href="{{.Href}}">{{.Per}}</a>{{end}} {{end}}</span>
+{{define "pager"}}<nav class="pager my-2 flex flex-wrap items-center gap-4">
+{{if .Multi}}<span class="pages join">{{if .PrevHref}}<a class="prev join-item btn btn-sm" href="{{.PrevHref}}">‹ Prev</a>{{else}}<span class="prev join-item btn btn-sm btn-disabled">‹ Prev</span>{{end}}<span class="page-of join-item btn btn-sm pointer-events-none">Page {{.Page}} of {{.Last}}</span>{{if .NextHref}}<a class="next join-item btn btn-sm" href="{{.NextHref}}">Next ›</a>{{else}}<span class="next join-item btn btn-sm btn-disabled">Next ›</span>{{end}}</span>{{end}}
+<span class="rows text-base-content/60">{{.Rows}}</span>
+<span class="per flex items-center gap-1">Rows per page: {{range .Sizes}}{{if .Current}}<b class="btn btn-xs btn-neutral">{{.Per}}</b>{{else}}<a class="btn btn-xs btn-ghost" href="{{.Href}}">{{.Per}}</a>{{end}}{{end}}</span>
 </nav>{{end}}
