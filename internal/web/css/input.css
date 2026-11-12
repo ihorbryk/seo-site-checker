@@ -1,0 +1,30 @@
+/* Source for internal/web/static/app.css: `mise run css` builds it (ADR 0004). */
+@import "tailwindcss" source(none);
+@source "../templates";
+@plugin "./daisyui.mjs" {
+  themes: light --default, dark --prefersdark;
+}
+
+/* Elements the templates leave unclassed. */
+@layer base {
+  h1 { @apply mb-3 text-xl font-semibold; }
+  h2 { @apply mt-6 mb-2 text-base font-semibold; }
+  h3 { @apply mt-4 mb-1.5 text-xs font-semibold tracking-wide uppercase text-base-content/60; }
+  main a:not(.btn, .tab) { @apply text-primary hover:underline; }
+  code { @apply font-mono text-xs; }
+  /* Tables keep header rows as plain <tr>s (systemtests count rows by position), so style an all-<th> row like daisyUI's thead. */
+  .table tr:not(:has(td)) { @apply text-xs text-base-content/60; }
+}
+
+/* Body and field diffs, keyed off the row and cell classes the diff handler emits. */
+@layer components {
+  .bodydiff table { @apply w-full table-fixed font-mono text-xs; }
+  .bodydiff td { @apply px-1.5 py-0 break-all whitespace-pre-wrap; }
+  .bodydiff td.n { @apply text-right text-base-content/40 select-none; }
+  .bodydiff td.op { @apply text-base-content/40; }
+  .bodydiff .add { @apply bg-success/15; }
+  .bodydiff .del { @apply bg-error/15; }
+  .bodydiff .gap td { @apply bg-base-200 text-center text-base-content/60; }
+  .sadd { @apply bg-success/15 px-1; }
+  .sdel { @apply bg-error/15 px-1; }
+}
