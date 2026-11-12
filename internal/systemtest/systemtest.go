@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ type System struct {
 	Worker  *river.Client[pgx.Tx]
 	Network *fakesite.Network
 	insert  *river.Client[pgx.Tx] // the insert-only client web and the scheduler share
+	queries *queryLog             // the sqlc queries the web app runs
 }
 
 // New starts the system; everything stops when the test ends. The worker
@@ -60,7 +62,17 @@ func New(t testing.TB) *System {
 		t.Fatal(err)
 	}
 	s.insert = insert
-	if s.Web, err = web.New(pool, insert, log); err != nil {
+	// The web app gets its own pool on the same database, traced so tests can
+	// see which queries a request ran (WebQueries).
+	s.queries = &queryLog{}
+	webCfg := pool.Config().Copy()
+	webCfg.ConnConfig.Tracer = s.queries
+	webPool, err := pgxpool.NewWithConfig(context.Background(), webCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(webPool.Close)
+	if s.Web, err = web.New(webPool, insert, log); err != nil {
 		t.Fatal(err)
 	}
 	s.Worker, err = worker.NewClient(pool, worker.Options{
@@ -82,6 +94,38 @@ func New(t testing.TB) *System {
 	})
 	return s
 }
+
+// WebQueries runs f and returns the names of the sqlc queries (e.g.
+// "ListCheckDiffRows") the web app ran meanwhile, one entry per execution.
+func (s *System) WebQueries(f func()) []string {
+	s.queries.mu.Lock()
+	s.queries.names = nil
+	s.queries.mu.Unlock()
+	f()
+	s.queries.mu.Lock()
+	defer s.queries.mu.Unlock()
+	return append([]string(nil), s.queries.names...)
+}
+
+// queryLog is a pgx tracer that records the name of each sqlc query.
+type queryLog struct {
+	mu    sync.Mutex
+	names []string
+}
+
+func (l *queryLog) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	// sqlc prefixes every query with "-- name: <Name> :<kind>".
+	if rest, ok := strings.CutPrefix(data.SQL, "-- name: "); ok {
+		if name, _, ok := strings.Cut(rest, " "); ok {
+			l.mu.Lock()
+			l.names = append(l.names, name)
+			l.mu.Unlock()
+		}
+	}
+	return ctx
+}
+
+func (l *queryLog) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 // Site starts a fake site for host (e.g. "shop.test") that the worker can reach.
 func (s *System) Site(host string) *fakesite.Site {

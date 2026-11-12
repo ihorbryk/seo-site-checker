@@ -100,7 +100,7 @@ WHERE f.check_id = $1 AND f.state = 'in_flight'
 ORDER BY f.id;
 
 -- name: ListFetchFailures :many
--- Fetch failures of a Check, with whether the Page also failed in the
+-- One page of the fetch failures of a Check, by URL, with whether the Page also failed in the
 -- Project's previous Check (the newest earlier Check that has ended).
 SELECT p.url, f.failure_kind, f.message,
     EXISTS (
@@ -116,7 +116,11 @@ FROM fetches f
 JOIN checks c ON c.id = f.check_id
 JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.outcome = 'failure'
-ORDER BY p.url;
+ORDER BY p.url
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountFetchFailures :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure';
 
 -- name: CountChecks :one
 SELECT count(*)::bigint FROM checks WHERE project_id = $1;
@@ -266,11 +270,17 @@ UPDATE checks SET
 WHERE id = $1;
 
 -- name: ListPageEvents :many
--- The Pages with the event kind in the Check (new includes reactivated),
--- leaving out Pages now ignored.
+-- One page of the Pages with the event kind in the Check (new includes
+-- reactivated), by URL, leaving out Pages now ignored.
 SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
 WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY(sqlc.arg(kinds)::text[])
-ORDER BY pg.url;
+ORDER BY pg.url, e.kind
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountPageEvents :one
+-- How many rows ListPageEvents has across all its pages.
+SELECT count(*)::bigint FROM page_events e JOIN pages pg ON pg.id = e.page_id
+WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY(sqlc.arg(kinds)::text[]);
 
 -- name: ListDueProjects :many
 -- Projects whose schedule is due at now: not manual, no active Check, and no
@@ -305,6 +315,11 @@ WHERE id = sqlc.arg(id);
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = $2 WHERE id = $1;
 
 -- name: ListSkippedFetches :many
+-- One page of a Check's skipped Fetches, by URL.
 SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.outcome = 'skipped'
-ORDER BY p.url;
+ORDER BY p.url
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: CountSkippedFetches :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped';

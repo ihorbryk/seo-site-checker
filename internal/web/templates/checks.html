@@ -61,49 +61,68 @@
 </div>
 {{if .Check.OrphanCountingSkipped}}<div role="alert" id="orphan-banner" class="banner alert alert-warning alert-soft mt-3 py-2">The seed Page was not fetched, so no links were seen: vanished and retired Pages were not counted in this Check.</div>{{end}}
 {{if .RobotsUnreachable}}<div role="alert" id="robots-banner" class="banner alert alert-warning alert-soft mt-3 py-2">robots.txt could not be read, so every Page was skipped in this Check.</div>{{end}}
-{{if .ShowSkipped}}<h2>Skipped Pages</h2>
-{{if .Skipped}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
-<table id="skipped-list" class="table table-sm">
-<tr><th>Page</th><th>Reason</th></tr>
-{{range .Skipped}}<tr><td class="mono font-mono text-xs">{{.Url}}</td><td>{{.SkipReason.String}}</td></tr>{{end}}
-</table></div>{{else}}<p class="text-base-content/60">None.</p>{{end}}
+{{if .ShowSkipped}}<h2 id="skipped">Skipped Pages</h2>
+{{template "skippedSection" .Skipped}}
 {{end}}
 {{if .RobotsBody}}<details id="robots-copy" class="collapse collapse-arrow mt-3 border border-base-300 bg-base-100"><summary class="collapse-title min-h-0 py-2">robots.txt used by this Check</summary><div class="collapse-content"><pre class="font-mono text-xs whitespace-pre-wrap">{{.RobotsBody}}</pre></div></details>{{end}}
 <h2>Changed Pages</h2>
-{{if .Changed}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+{{template "changedSection" .Changed}}
+<h2>New Pages</h2>
+{{template "eventsSection" .New}}
+<h2>Vanished Pages</h2>
+{{template "eventsSection" .Vanished}}
+<h2>Retired Pages</h2>
+{{template "eventsSection" .Retired}}
+<h2>Fetch failures</h2>
+{{template "failuresSection" .Failures}}
+{{end}}
+
+{{/* Report sections: each is rendered inside the Report and alone, as the
+htmx fragment its pager swaps in place of #<id>-section. */}}
+
+{{define "changedSection"}}<div id="changed-section">
+{{if .Rows}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 <table id="changed" class="table table-sm">
 <tr><th>Page</th><th>Tier</th><th>Changed</th><th>SEO</th></tr>
 
-{{range .Changed}}<tr><td class="mono font-mono text-xs"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
+{{range .Rows}}<tr><td class="mono font-mono text-xs"><a href="/d/{{.SnapshotID}}">{{.URL}}</a></td>
 <td>{{template "tierBadge" .Tier}}</td>
 <td class="badges"><div class="flex flex-wrap gap-1">{{range .Badges}}<span class="badge badge-sm badge-ghost">{{.}}</span>{{end}}</div></td>
 <td class="seo">{{range .SEO}}<div>{{.}}</div>{{end}}{{if .Chain}}<div class="chain mono font-mono text-xs">{{.Chain}}</div>{{end}}</td></tr>{{end}}
 
 </table></div>{{end}}
-<h2>New Pages</h2>
-{{template "pageEvents" .New}}
-<h2>Vanished Pages</h2>
-{{template "pageEvents" .Vanished}}
-<h2>Retired Pages</h2>
-{{template "pageEvents" .Retired}}
-<h2>Fetch failures</h2>
-{{if .Failures}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
-<table id="failures" class="table table-sm">
-<tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
+{{if .Pager.Shown}}{{template "pager" .Pager}}{{end}}
+</div>{{end}}
 
-{{range .Failures}}<tr><td class="mono font-mono text-xs">{{.Url}}</td><td><span class="badge badge-sm badge-error badge-outline">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
-<td>{{if .AlsoFailedPreviously}}<span class="badge badge-sm badge-ghost also">also failed in the previous Check</span>{{end}}</td></tr>{{end}}
-
-</table></div>{{else}}<p class="text-base-content/60">None.</p>{{end}}
-{{end}}
-
-{{define "pageEvents"}}
+{{define "eventsSection"}}<div id="{{.ID}}-section">
 {{if .Rows}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
 <table id="{{.ID}}" class="table table-sm">
 <tr><th>Page</th><th></th></tr>
 {{range .Rows}}<tr><td class="mono font-mono text-xs">{{.Url}}</td><td>{{if eq .Kind "reactivated"}}<span class="badge badge-sm badge-info badge-outline">reactivated</span>{{end}}</td></tr>{{end}}
 </table></div>{{else}}<p class="text-base-content/60">None.</p>{{end}}
-{{end}}
+{{if .Pager.Shown}}{{template "pager" .Pager}}{{end}}
+</div>{{end}}
+
+{{define "failuresSection"}}<div id="failures-section">
+{{if .Rows}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+<table id="failures" class="table table-sm">
+<tr><th>Page</th><th>Kind</th><th>Message</th><th></th></tr>
+
+{{range .Rows}}<tr><td class="mono font-mono text-xs">{{.Url}}</td><td><span class="badge badge-sm badge-error badge-outline">{{.FailureKind.String}}</span></td><td>{{.Message.String}}</td>
+<td>{{if .AlsoFailedPreviously}}<span class="badge badge-sm badge-ghost also">also failed in the previous Check</span>{{end}}</td></tr>{{end}}
+
+</table></div>{{else}}<p class="text-base-content/60">None.</p>{{end}}
+{{if .Pager.Shown}}{{template "pager" .Pager}}{{end}}
+</div>{{end}}
+
+{{define "skippedSection"}}<div id="skipped-section">
+{{if .Rows}}<div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
+<table id="skipped-list" class="table table-sm">
+<tr><th>Page</th><th>Reason</th></tr>
+{{range .Rows}}<tr><td class="mono font-mono text-xs">{{.Url}}</td><td>{{.SkipReason.String}}</td></tr>{{end}}
+</table></div>{{else}}<p class="text-base-content/60">None.</p>{{end}}
+{{if .Pager.Shown}}{{template "pager" .Pager}}{{end}}
+</div>{{end}}
 
 {{define "pages"}}
 {{template "tabs" .}}

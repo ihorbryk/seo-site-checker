@@ -172,22 +172,19 @@ func (q *Queries) LatestSnapshotOfPage(ctx context.Context, pageID int64) (Lates
 	return i, err
 }
 
-const listCheckDiffs = `-- name: ListCheckDiffs :many
-SELECT p.id AS page_id, p.url, p.origin, p.state, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+const listCheckDiffRows = `-- name: ListCheckDiffRows :many
+SELECT p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
     d.body_changed, d.seo_changes, d.tier,
     COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
-WHERE s.check_id = $1
+WHERE d.snapshot_id = ANY($1::bigint[])
 ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url
 `
 
-type ListCheckDiffsRow struct {
-	PageID         int64
+type ListCheckDiffRowsRow struct {
 	Url            string
-	Origin         string
-	State          string
 	SnapshotID     int64
 	StatusChanged  bool
 	HeadersChanged bool
@@ -198,23 +195,18 @@ type ListCheckDiffsRow struct {
 	RedirectTarget string
 }
 
-// A Check's Diffs (empty ones too), most significant first, then by URL. The
-// caller leaves out Pages now ignored or excluded and splits changed from
-// unchanged.
-func (q *Queries) ListCheckDiffs(ctx context.Context, checkID int64) ([]ListCheckDiffsRow, error) {
-	rows, err := q.db.Query(ctx, listCheckDiffs, checkID)
+// The Changed Pages columns of the given Diffs, in ListCheckDiffStates order.
+func (q *Queries) ListCheckDiffRows(ctx context.Context, snapshotIds []int64) ([]ListCheckDiffRowsRow, error) {
+	rows, err := q.db.Query(ctx, listCheckDiffRows, snapshotIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListCheckDiffsRow
+	var items []ListCheckDiffRowsRow
 	for rows.Next() {
-		var i ListCheckDiffsRow
+		var i ListCheckDiffRowsRow
 		if err := rows.Scan(
-			&i.PageID,
 			&i.Url,
-			&i.Origin,
-			&i.State,
 			&i.SnapshotID,
 			&i.StatusChanged,
 			&i.HeadersChanged,
@@ -223,6 +215,53 @@ func (q *Queries) ListCheckDiffs(ctx context.Context, checkID int64) ([]ListChec
 			&i.SeoChanges,
 			&i.Tier,
 			&i.RedirectTarget,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCheckDiffStates = `-- name: ListCheckDiffStates :many
+SELECT d.snapshot_id, p.url, p.origin, p.state, d.tier
+FROM diffs d
+JOIN snapshots s ON s.id = d.snapshot_id
+JOIN pages p ON p.id = s.page_id
+WHERE s.check_id = $1
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url
+`
+
+type ListCheckDiffStatesRow struct {
+	SnapshotID int64
+	Url        string
+	Origin     string
+	State      string
+	Tier       string
+}
+
+// What a Report needs to classify every Diff of a Check (empty ones too) and
+// rank the changed ones: most significant first, then by URL. The caller
+// leaves out Pages now ignored or excluded and splits changed from unchanged;
+// the costly columns come from ListCheckDiffRows for one page of them.
+func (q *Queries) ListCheckDiffStates(ctx context.Context, checkID int64) ([]ListCheckDiffStatesRow, error) {
+	rows, err := q.db.Query(ctx, listCheckDiffStates, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCheckDiffStatesRow
+	for rows.Next() {
+		var i ListCheckDiffStatesRow
+		if err := rows.Scan(
+			&i.SnapshotID,
+			&i.Url,
+			&i.Origin,
+			&i.State,
+			&i.Tier,
 		); err != nil {
 			return nil, err
 		}

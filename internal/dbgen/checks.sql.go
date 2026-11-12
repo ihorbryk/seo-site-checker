@@ -81,6 +81,17 @@ func (q *Queries) CountDroppedURLs(ctx context.Context, checkID int64) (int64, e
 	return column_1, err
 }
 
+const countFetchFailures = `-- name: CountFetchFailures :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure'
+`
+
+func (q *Queries) CountFetchFailures(ctx context.Context, checkID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countFetchFailures, checkID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countNewlyDiscoveredPages = `-- name: CountNewlyDiscoveredPages :one
 SELECT count(*)::bigint FROM pages pg JOIN checks c ON c.id = $1
 WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_at >= c.started_at
@@ -143,12 +154,41 @@ func (q *Queries) CountOrphans(ctx context.Context, checkID int64) ([]CountOrpha
 	return items, nil
 }
 
+const countPageEvents = `-- name: CountPageEvents :one
+SELECT count(*)::bigint FROM page_events e JOIN pages pg ON pg.id = e.page_id
+WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY($2::text[])
+`
+
+type CountPageEventsParams struct {
+	CheckID int64
+	Kinds   []string
+}
+
+// How many rows ListPageEvents has across all its pages.
+func (q *Queries) CountPageEvents(ctx context.Context, arg CountPageEventsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPageEvents, arg.CheckID, arg.Kinds)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countPendingFetches = `-- name: CountPendingFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending'
 `
 
 func (q *Queries) CountPendingFetches(ctx context.Context, checkID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, countPendingFetches, checkID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countSkippedFetches = `-- name: CountSkippedFetches :one
+SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped'
+`
+
+func (q *Queries) CountSkippedFetches(ctx context.Context, checkID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countSkippedFetches, checkID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -674,7 +714,14 @@ JOIN checks c ON c.id = f.check_id
 JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.outcome = 'failure'
 ORDER BY p.url
+LIMIT $3 OFFSET $2
 `
+
+type ListFetchFailuresParams struct {
+	CheckID   int64
+	RowOffset int32
+	RowLimit  int32
+}
 
 type ListFetchFailuresRow struct {
 	Url                  string
@@ -683,10 +730,10 @@ type ListFetchFailuresRow struct {
 	AlsoFailedPreviously bool
 }
 
-// Fetch failures of a Check, with whether the Page also failed in the
+// One page of the fetch failures of a Check, by URL, with whether the Page also failed in the
 // Project's previous Check (the newest earlier Check that has ended).
-func (q *Queries) ListFetchFailures(ctx context.Context, checkID int64) ([]ListFetchFailuresRow, error) {
-	rows, err := q.db.Query(ctx, listFetchFailures, checkID)
+func (q *Queries) ListFetchFailures(ctx context.Context, arg ListFetchFailuresParams) ([]ListFetchFailuresRow, error) {
+	rows, err := q.db.Query(ctx, listFetchFailures, arg.CheckID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -746,12 +793,15 @@ func (q *Queries) ListInFlightFetches(ctx context.Context, checkID int64) ([]Lis
 const listPageEvents = `-- name: ListPageEvents :many
 SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
 WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY($2::text[])
-ORDER BY pg.url
+ORDER BY pg.url, e.kind
+LIMIT $4 OFFSET $3
 `
 
 type ListPageEventsParams struct {
-	CheckID int64
-	Kinds   []string
+	CheckID   int64
+	Kinds     []string
+	RowOffset int32
+	RowLimit  int32
 }
 
 type ListPageEventsRow struct {
@@ -759,10 +809,15 @@ type ListPageEventsRow struct {
 	Kind string
 }
 
-// The Pages with the event kind in the Check (new includes reactivated),
-// leaving out Pages now ignored.
+// One page of the Pages with the event kind in the Check (new includes
+// reactivated), by URL, leaving out Pages now ignored.
 func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) ([]ListPageEventsRow, error) {
-	rows, err := q.db.Query(ctx, listPageEvents, arg.CheckID, arg.Kinds)
+	rows, err := q.db.Query(ctx, listPageEvents,
+		arg.CheckID,
+		arg.Kinds,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -785,15 +840,23 @@ const listSkippedFetches = `-- name: ListSkippedFetches :many
 SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.outcome = 'skipped'
 ORDER BY p.url
+LIMIT $3 OFFSET $2
 `
+
+type ListSkippedFetchesParams struct {
+	CheckID   int64
+	RowOffset int32
+	RowLimit  int32
+}
 
 type ListSkippedFetchesRow struct {
 	Url        string
 	SkipReason pgtype.Text
 }
 
-func (q *Queries) ListSkippedFetches(ctx context.Context, checkID int64) ([]ListSkippedFetchesRow, error) {
-	rows, err := q.db.Query(ctx, listSkippedFetches, checkID)
+// One page of a Check's skipped Fetches, by URL.
+func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetchesParams) ([]ListSkippedFetchesRow, error) {
+	rows, err := q.db.Query(ctx, listSkippedFetches, arg.CheckID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

@@ -71,6 +71,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.H
 	mux.HandleFunc("GET /c/{id}", s.checkPage)
 	mux.HandleFunc("POST /c/{id}/cancel", s.cancelCheck)
 	mux.HandleFunc("GET /c/{id}/progress", s.progressFragment)
+	mux.HandleFunc("GET /c/{id}/sections/{section}", s.reportSectionPage)
 	mux.HandleFunc("GET /s/{id}", s.snapshotPage)
 	mux.HandleFunc("GET /d/{id}", s.diffPage)
 	return chain(mux, recoverPanics(log), logRequests(log)), nil
@@ -102,7 +103,7 @@ func (s *server) addProject(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// render writes a screen: just the screen for htmx requests, otherwise wrapped
+// render writes a screen: just the screen for htmx requests (but history restores), otherwise wrapped
 // in the shell with the breadcrumb header.
 func (s *server) render(w http.ResponseWriter, r *http.Request, screen, title string, crumbs []crumb, data map[string]any) {
 	var buf bytes.Buffer
@@ -110,7 +111,8 @@ func (s *server) render(w http.ResponseWriter, r *http.Request, screen, title st
 		s.fail(w, r, err)
 		return
 	}
-	if r.Header.Get("HX-Request") == "true" {
+	// A history restore (Back to a URL a Report section pushed) needs the whole page.
+	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") != "true" {
 		_, _ = w.Write(buf.Bytes())
 		return
 	}

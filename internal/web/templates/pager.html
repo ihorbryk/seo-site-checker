@@ -1,5 +1,7 @@
-{{define "pager"}}<nav class="pager my-2 flex flex-wrap items-center gap-4">
-{{if .Multi}}<span class="pages join">{{if .PrevHref}}<a class="prev join-item btn btn-sm" href="{{.PrevHref}}">‹ Prev</a>{{else}}<span class="prev join-item btn btn-sm btn-disabled">‹ Prev</span>{{end}}<span class="page-of join-item btn btn-sm pointer-events-none">Page {{.Page}} of {{.Last}}</span>{{if .NextHref}}<a class="next join-item btn btn-sm" href="{{.NextHref}}">Next ›</a>{{else}}<span class="next join-item btn btn-sm btn-disabled">Next ›</span>{{end}}</span>{{end}}
+{{/* A section pager (.Target set) also swaps its Report section through htmx:
+each link fetches the section alone and pushes the full Report URL. */}}
+{{define "pager"}}<nav class="pager my-2 flex flex-wrap items-center gap-4"{{if .Target}} hx-target="#{{.Target}}" hx-swap="outerHTML show:#{{.Target}}:top"{{end}}>
+{{if .Multi}}<span class="pages join">{{if .PrevHref}}<a class="prev join-item btn btn-sm" href="{{.PrevHref}}"{{if .Target}} hx-get="{{.PrevHx}}" hx-push-url="{{.PrevHref}}"{{end}}>‹ Prev</a>{{else}}<span class="prev join-item btn btn-sm btn-disabled">‹ Prev</span>{{end}}<span class="page-of join-item btn btn-sm pointer-events-none">Page {{.Page}} of {{.Last}}</span>{{if .NextHref}}<a class="next join-item btn btn-sm" href="{{.NextHref}}"{{if .Target}} hx-get="{{.NextHx}}" hx-push-url="{{.NextHref}}"{{end}}>Next ›</a>{{else}}<span class="next join-item btn btn-sm btn-disabled">Next ›</span>{{end}}</span>{{end}}
 <span class="rows text-base-content/60">{{.Rows}}</span>
-<span class="per flex items-center gap-1">Rows per page: {{range .Sizes}}{{if .Current}}<b class="btn btn-xs btn-neutral">{{.Per}}</b>{{else}}<a class="btn btn-xs btn-ghost" href="{{.Href}}">{{.Per}}</a>{{end}}{{end}}</span>
+<span class="per flex items-center gap-1">Rows per page: {{range .Sizes}}{{if .Current}}<b class="btn btn-xs btn-neutral">{{.Per}}</b>{{else}}<a class="btn btn-xs btn-ghost" href="{{.Href}}"{{if $.Target}} hx-get="{{.Hx}}" hx-push-url="{{.Href}}"{{end}}>{{.Per}}</a>{{end}}{{end}}</span>
 </nav>{{end}}

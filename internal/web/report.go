@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
@@ -17,36 +18,56 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// reportSections are the Page event sections of a Report, in display order
-// after Changed Pages (a `new` section also lists reactivated Pages).
-var reportSections = []struct {
-	Key, ID string
-	Kinds   []string
-}{
-	{"New", "new", []string{page.EventNew, page.EventReactivated}}, // pageliterals:ok HTML id
-	{"Vanished", "vanished", []string{page.EventVanished}},         // pageliterals:ok HTML id
-	{"Retired", "retired", []string{page.EventRetired}},            // pageliterals:ok HTML id
+// reportSections are the paginated sections of a Report, in display order.
+// ID is the section's HTML id, its query parameter prefix (<id>_page,
+// <id>_per) and, as <id>-section, the container htmx swaps; Key is its entry
+// in the Report template's data. Skipped is only shown with ?show=skipped.
+var reportSections = []reportSection{
+	{Key: "Changed", ID: "changed", Template: "changedSection"},
+	{Key: "New", ID: "new", Template: "eventsSection", Kinds: []string{page.EventNew, page.EventReactivated}}, // pageliterals:ok HTML id
+	{Key: "Vanished", ID: "vanished", Template: "eventsSection", Kinds: []string{page.EventVanished}},         // pageliterals:ok HTML id
+	{Key: "Retired", ID: "retired", Template: "eventsSection", Kinds: []string{page.EventRetired}},            // pageliterals:ok HTML id
+	{Key: "Failures", ID: "failures", Template: "failuresSection"},
+	{Key: "Skipped", ID: "skipped", Template: "skippedSection"},
 }
 
-// eventSection is one Page event section of the Report.
-type eventSection struct {
-	ID   string
-	Rows []dbgen.ListPageEventsRow
+type reportSection struct {
+	Key, ID, Template string
+	Kinds             []string // Page event sections only
+}
+
+// sectionView is what a section template renders: one page of its rows.
+type sectionView struct {
+	ID    string
+	Pager pager
+	Rows  any
+}
+
+// report is one request's view of an ended Check's Report.
+type report struct {
+	ctx   context.Context
+	check dbgen.Check
+	proj  dbgen.Project
+	url   *url.URL // the Report's URL with the request's query
+	diffs *diffIndex
+}
+
+func (s *server) newReport(r *http.Request, c dbgen.Check, p dbgen.Project) *report {
+	u := *r.URL
+	u.Path, u.RawPath, u.Fragment = fmt.Sprintf("/c/%d", c.ID), "", ""
+	return &report{ctx: r.Context(), check: c, proj: p, url: &u}
 }
 
 // buildReport gathers what the Report template shows for an ended Check.
 func (s *server) buildReport(r *http.Request, c dbgen.Check, p dbgen.Project) (map[string]any, error) {
 	ctx := r.Context()
+	rep := s.newReport(r, c, p)
 	data := map[string]any{
 		"Project": p, "Check": c,
 		"Started": formatTime(c.StartedAt.Time, c.StartedAt.Valid), "Finished": formatTime(c.FinishedAt.Time, c.FinishedAt.Valid),
 		"Duration": duration(c.StartedAt, c.FinishedAt),
 	}
-	failures, err := s.q.ListFetchFailures(ctx, c.ID)
-	if err != nil {
-		return nil, err
-	}
-	data["Failures"] = failures
+	var err error
 	if data["Dropped"], err = s.q.CountDroppedURLs(ctx, c.ID); err != nil {
 		return nil, err
 	}
@@ -54,28 +75,111 @@ func (s *server) buildReport(r *http.Request, c dbgen.Check, p dbgen.Project) (m
 		data["RobotsUnreachable"] = check.RobotsUnreachable(int(c.RobotsStatus.Int32), c.RobotsFailureKind.String)
 		data["RobotsBody"] = string(c.RobotsBody)
 	}
-	if r.URL.Query().Get("show") == "skipped" {
-		skipped, err := s.q.ListSkippedFetches(ctx, c.ID)
-		if err != nil {
-			return nil, err
-		}
-		data["ShowSkipped"] = true
-		data["Skipped"] = skipped
-	}
+	showSkipped := r.URL.Query().Get("show") == "skipped"
+	data["ShowSkipped"] = showSkipped
 	for _, sec := range reportSections {
-		rows, err := s.q.ListPageEvents(ctx, dbgen.ListPageEventsParams{CheckID: c.ID, Kinds: sec.Kinds})
-		if err != nil {
+		if sec.ID == "skipped" && !showSkipped {
+			continue
+		}
+		if data[sec.Key], err = s.buildSection(rep, sec); err != nil {
 			return nil, err
 		}
-		data[sec.Key] = eventSection{ID: sec.ID, Rows: rows}
 	}
-	changed, unchanged, err := s.changedPages(r, c, p)
+	idx, err := s.diffIndex(rep)
 	if err != nil {
 		return nil, err
 	}
-	data["Changed"] = changed
-	data["ChangedCount"], data["UnchangedCount"] = len(changed), unchanged
+	data["ChangedCount"], data["UnchangedCount"] = len(idx.changed), idx.unchanged
 	return data, nil
+}
+
+// reportSectionPage is the htmx fragment of one Report section: only that
+// section's queries run. A full load is sent to the Report itself.
+func (s *server) reportSectionPage(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathID(w, r)
+	if !ok {
+		return
+	}
+	var sec reportSection
+	for _, rs := range reportSections {
+		if rs.ID == r.PathValue("section") {
+			sec = rs
+		}
+	}
+	if sec.ID == "" {
+		http.NotFound(w, r)
+		return
+	}
+	c, err := s.q.GetCheck(r.Context(), id)
+	if err != nil {
+		s.notFoundOrFail(w, r, err)
+		return
+	}
+	full := fmt.Sprintf("/c/%d?%s#%s", c.ID, r.URL.RawQuery, sec.ID)
+	if r.Header.Get("HX-Request") != "true" || check.Active(c.State) {
+		sendTo(w, r, full)
+		return
+	}
+	p, err := s.q.GetProject(r.Context(), c.ProjectID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	view, err := s.buildSection(s.newReport(r, c, p), sec)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.fragment(w, r, sec.Template, view)
+}
+
+// buildSection loads one page of a Report section: its total first, then
+// only the rows on the current page.
+func (s *server) buildSection(rep *report, sec reportSection) (sectionView, error) {
+	ctx, id := rep.ctx, rep.check.ID
+	var (
+		total int64
+		rows  any
+		err   error
+	)
+	var pg pager
+	switch sec.ID {
+	case "changed":
+		idx, err := s.diffIndex(rep)
+		if err != nil {
+			return sectionView{}, err
+		}
+		total = int64(len(idx.changed))
+		pg = paginateSection(rep.url, sec.ID, int(total))
+		rows, err = s.changedRows(rep, idx.changed[pg.Offset():pg.End(int(total))])
+		if err != nil {
+			return sectionView{}, err
+		}
+	case "failures":
+		if total, err = s.q.CountFetchFailures(ctx, id); err != nil {
+			return sectionView{}, err
+		}
+		pg = paginateSection(rep.url, sec.ID, int(total))
+		rows, err = s.q.ListFetchFailures(ctx, dbgen.ListFetchFailuresParams{CheckID: id, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset())})
+	case "skipped":
+		if total, err = s.q.CountSkippedFetches(ctx, id); err != nil {
+			return sectionView{}, err
+		}
+		pg = paginateSection(rep.url, sec.ID, int(total))
+		rows, err = s.q.ListSkippedFetches(ctx, dbgen.ListSkippedFetchesParams{CheckID: id, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset())})
+	default:
+		if total, err = s.q.CountPageEvents(ctx, dbgen.CountPageEventsParams{CheckID: id, Kinds: sec.Kinds}); err != nil {
+			return sectionView{}, err
+		}
+		pg = paginateSection(rep.url, sec.ID, int(total))
+		rows, err = s.q.ListPageEvents(ctx, dbgen.ListPageEventsParams{
+			CheckID: id, Kinds: sec.Kinds, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset()),
+		})
+	}
+	if err != nil {
+		return sectionView{}, err
+	}
+	return sectionView{ID: sec.ID, Pager: pg, Rows: rows}, nil
 }
 
 // changedRow is one Page in the Changed Pages section.
@@ -106,32 +210,57 @@ func (s *server) checkChain(ctx context.Context, checkID, projectID int64, host,
 	return chain, lookupErr
 }
 
-// changedPages returns the Check's changed Pages, most significant first, and
-// how many Pages were unchanged. Pages that are now ignored or excluded are
-// left out of both.
-func (s *server) changedPages(r *http.Request, c dbgen.Check, p dbgen.Project) (changed []changedRow, unchanged int, err error) {
-	rows, err := s.q.ListCheckDiffs(r.Context(), c.ID)
-	if err != nil {
-		return nil, 0, err
+// diffIndex is a Check's Diffs classified for its Report: the changed ones,
+// most significant first, and how many were unchanged. Pages that are now
+// ignored or excluded are left out of both.
+type diffIndex struct {
+	changed   []int64 // snapshot ids
+	unchanged int
+}
+
+// diffIndex classifies the whole Check once per request from a light query,
+// so counts and ranking never depend on the page shown.
+func (s *server) diffIndex(rep *report) (*diffIndex, error) {
+	if rep.diffs != nil {
+		return rep.diffs, nil
 	}
+	rows, err := s.q.ListCheckDiffStates(rep.ctx, rep.check.ID)
+	if err != nil {
+		return nil, err
+	}
+	idx := &diffIndex{}
 	for _, d := range rows {
-		if d.State == page.StateIgnored || page.Excluded(p.ExcludePatterns, d.Origin, d.Url) {
+		if d.State == page.StateIgnored || page.Excluded(rep.proj.ExcludePatterns, d.Origin, d.Url) {
 			continue
 		}
 		if d.Tier == string(diff.TierEmpty) {
-			unchanged++
+			idx.unchanged++
 			continue
 		}
-		row, err := s.changedRowOf(r.Context(), c.ID, p, d)
-		if err != nil {
-			return nil, 0, err
-		}
-		changed = append(changed, row)
+		idx.changed = append(idx.changed, d.SnapshotID)
 	}
-	return changed, unchanged, nil
+	rep.diffs = idx
+	return idx, nil
 }
 
-func (s *server) changedRowOf(ctx context.Context, checkID int64, p dbgen.Project, d dbgen.ListCheckDiffsRow) (changedRow, error) {
+// changedRows loads and formats the given changed Diffs, in ranked order.
+func (s *server) changedRows(rep *report, ids []int64) ([]changedRow, error) {
+	rows, err := s.q.ListCheckDiffRows(rep.ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]changedRow, 0, len(rows))
+	for _, d := range rows {
+		row, err := s.changedRowOf(rep.ctx, rep.check.ID, rep.proj, d)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (s *server) changedRowOf(ctx context.Context, checkID int64, p dbgen.Project, d dbgen.ListCheckDiffRowsRow) (changedRow, error) {
 	row := changedRow{SnapshotID: d.SnapshotID, URL: d.Url, Tier: d.Tier}
 	for _, b := range []struct {
 		on   bool

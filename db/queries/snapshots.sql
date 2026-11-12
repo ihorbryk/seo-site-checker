@@ -44,17 +44,27 @@ SELECT s.status, COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redi
 FROM snapshots s JOIN pages p ON p.id = s.page_id
 WHERE s.check_id = $1 AND p.project_id = $2 AND p.url = $3;
 
--- name: ListCheckDiffs :many
--- A Check's Diffs (empty ones too), most significant first, then by URL. The
--- caller leaves out Pages now ignored or excluded and splits changed from
--- unchanged.
-SELECT p.id AS page_id, p.url, p.origin, p.state, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
+-- name: ListCheckDiffStates :many
+-- What a Report needs to classify every Diff of a Check (empty ones too) and
+-- rank the changed ones: most significant first, then by URL. The caller
+-- leaves out Pages now ignored or excluded and splits changed from unchanged;
+-- the costly columns come from ListCheckDiffRows for one page of them.
+SELECT d.snapshot_id, p.url, p.origin, p.state, d.tier
+FROM diffs d
+JOIN snapshots s ON s.id = d.snapshot_id
+JOIN pages p ON p.id = s.page_id
+WHERE s.check_id = $1
+ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url;
+
+-- name: ListCheckDiffRows :many
+-- The Changed Pages columns of the given Diffs, in ListCheckDiffStates order.
+SELECT p.url, d.snapshot_id, d.status_changed, d.headers_changed, d.seo_changed,
     d.body_changed, d.seo_changes, d.tier,
     COALESCE(s.seo_fields->'redirect_target'->>0, '')::text AS redirect_target
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
-WHERE s.check_id = $1
+WHERE d.snapshot_id = ANY(sqlc.arg(snapshot_ids)::bigint[])
 ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url;
 
 -- name: GetDiffBaseline :one
