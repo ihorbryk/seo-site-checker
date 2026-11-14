@@ -38,3 +38,13 @@ func TestCrossOriginProtection(t *testing.T) {
 		})
 	}
 }
+
+func TestRefusedCrossOriginRequestsStillCarryHSTS(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(""))
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	w := httptest.NewRecorder()
+	newTestApp(t).Anonymous.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden || w.Header().Get("Strict-Transport-Security") == "" {
+		t.Errorf("status %d, HSTS %q; want a 403 with HSTS", w.Code, w.Header().Get("Strict-Transport-Security"))
+	}
+}

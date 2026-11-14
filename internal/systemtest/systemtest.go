@@ -52,24 +52,55 @@ type System struct {
 	insert  *river.Client[pgx.Tx] // the insert-only client web and the scheduler share
 	queries *queryLog             // the sqlc queries the web app runs
 	webOpts web.Options
+	webLog  *logBuffer
 }
 
 // Option customises the web app a System starts.
-type Option func(*web.Options)
+type Option func(*settings)
+
+type settings struct {
+	web     web.Options
+	capture bool
+}
+
+// logBuffer is a goroutine-safe io.Writer holding the web app's log.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
 
 // InsecureCookies starts the web app with INSECURE_COOKIES=true.
 func InsecureCookies() Option {
-	return func(o *web.Options) { o.InsecureCookies = true }
+	return func(o *settings) { o.web.InsecureCookies = true }
 }
 
 // TrustedProxyHeader starts the web app with TRUSTED_PROXY_HEADER=header.
 func TrustedProxyHeader(header string) Option {
-	return func(o *web.Options) { o.TrustedProxyHeader = header }
+	return func(o *settings) { o.web.TrustedProxyHeader = header }
 }
 
 // DenyRegistration starts the web app with DENY_REGISTRATION=true.
 func DenyRegistration() Option {
-	return func(o *web.Options) { o.DenyRegistration = true }
+	return func(o *settings) { o.web.DenyRegistration = true }
+}
+
+// WebLog captures the web app's log; read it with System.WebLogLines.
+func WebLog() Option { return func(o *settings) { o.capture = true } }
+
+// WebLogLines returns the web app's log lines so far (see WebLog).
+func (s *System) WebLogLines() []string {
+	s.webLog.mu.Lock()
+	defer s.webLog.mu.Unlock()
+	if s.webLog.buf.Len() == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSpace(s.webLog.buf.String()), "\n")
 }
 
 // New starts the system; everything stops when the test ends. The worker
@@ -96,11 +127,17 @@ func New(t testing.TB, opts ...Option) *System {
 		t.Fatal(err)
 	}
 	t.Cleanup(webPool.Close)
-	s.webOpts = web.Options{Argon2: testfixtures.Argon2}
+	cfg := settings{web: web.Options{Argon2: testfixtures.Argon2}}
 	for _, o := range opts {
-		o(&s.webOpts)
+		o(&cfg)
 	}
-	if s.Web, err = web.New(webPool, insert, log, s.webOpts); err != nil {
+	s.webOpts = cfg.web
+	webLog := log
+	if cfg.capture {
+		s.webLog = &logBuffer{}
+		webLog = slog.New(slog.NewTextHandler(s.webLog, nil))
+	}
+	if s.Web, err = web.New(webPool, insert, webLog, s.webOpts); err != nil {
 		t.Fatal(err)
 	}
 	s.Browser = s.NewUser()

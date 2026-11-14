@@ -2,9 +2,9 @@ package web
 
 import (
 	"bytes"
-	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/session"
@@ -44,12 +44,14 @@ func (s *server) passwordPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	u := currentUser(r)
 	current, next := r.PostFormValue("current_password"), r.PostFormValue("new_password")
 
-	key := fmt.Sprint(u.ID)
-	if retry, blocked := s.tripped(limitCheck{l: s.limits.passwordUser, key: key}); blocked {
+	// Charged up front as if the current password is wrong (see login); a
+	// correct one gives the hit back.
+	key := strconv.FormatInt(u.ID, 10)
+	if retry, ok := s.reserve(limitCheck{l: s.limits.passwordUser, key: key}); !ok {
 		s.passwordScreen(w, r, http.StatusTooManyRequests, tooMany(w, retry), "")
 		return
 	}
@@ -58,10 +60,10 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 		ok, _ = s.hasher.Verify(current, u.PasswordHash)
 	}
 	if !ok {
-		s.limits.passwordUser.Record(key)
 		s.passwordScreen(w, r, http.StatusUnprocessableEntity, errWrongCurrentPassword, "")
 		return
 	}
+	s.limits.passwordUser.Refund(key)
 	if err := user.ValidatePassword(next); err != nil {
 		s.passwordScreen(w, r, http.StatusUnprocessableEntity, err.Error(), "")
 		return

@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/ratelimit"
+	"github.com/ihorbryk/seo-site-checker/internal/user"
 )
 
-// limits are the rate limiters on the credential forms. All check before
-// argon2 runs.
+// limits are the rate limiters on the credential forms. Each form reserves
+// its hits before argon2 runs and refunds the ones a success should not cost.
 type limits struct {
 	loginIP      *ratelimit.Limiter // failed sign-ins per client IP
-	loginEmail   *ratelimit.Limiter // failed sign-ins per normalised email, known or not
+	loginEmail   *ratelimit.Limiter // failed sign-ins per hashed canonical email, known or not
 	registerIP   *ratelimit.Limiter // registration attempts per client IP, successes included
 	passwordUser *ratelimit.Limiter // failed current-password checks per User
 }
@@ -29,12 +30,10 @@ func newLimits(now func() time.Time) limits {
 	}
 }
 
-// limitCheck pairs a limiter with the key to check. secret keys (emails) are
-// hashed in logs.
+// limitCheck pairs a limiter with the key to charge.
 type limitCheck struct {
-	l      *ratelimit.Limiter
-	key    string
-	secret bool
+	l   *ratelimit.Limiter
+	key string
 }
 
 // clientIP is the key for the client behind r.
@@ -43,24 +42,33 @@ func (s *server) clientIP(r *http.Request) string {
 	return ratelimit.ClientKey(r.RemoteAddr, h, r.Header.Get(h))
 }
 
-// tripped reports whether any check is blocked, logging one warn line per
-// tripped limiter. retry is the longest wait among them.
-func (s *server) tripped(checks ...limitCheck) (retry time.Duration, blocked bool) {
-	for _, c := range checks {
-		d, b := c.l.Blocked(c.key)
-		if !b {
+// emailKey is the limiter key for a posted email: a hash of its canonical
+// form, so the key is short however long the input and never holds the
+// address itself (it is logged when the limit trips).
+func emailKey(posted string) string {
+	sum := sha256.Sum256([]byte(user.CanonicalEmail(posted)))
+	return hex.EncodeToString(sum[:8])
+}
+
+// reserve charges one hit to each check in order, atomically per limiter. At
+// the first refusal it gives back the hits already taken, so a refused
+// request costs nothing, and returns the wait. A key's trip is logged once,
+// on its first refusal, not on every refused request.
+func (s *server) reserve(checks ...limitCheck) (retry time.Duration, ok bool) {
+	for i, c := range checks {
+		v := c.l.Reserve(c.key)
+		if v.Allowed {
 			continue
 		}
-		blocked = true
-		retry = max(retry, d)
-		key := c.key
-		if c.secret {
-			sum := sha256.Sum256([]byte(key))
-			key = hex.EncodeToString(sum[:8])
+		for _, taken := range checks[:i] {
+			taken.l.Refund(taken.key)
 		}
-		s.log.Warn("rate limit tripped", "limiter", c.l.Name(), "key", key)
+		if v.Tripped {
+			s.log.Warn("rate limit tripped", "limiter", c.l.Name(), "key", c.key)
+		}
+		return v.RetryAfter, false
 	}
-	return retry, blocked
+	return 0, true
 }
 
 // tooMany sets Retry-After and returns the message the form shows.

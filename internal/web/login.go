@@ -5,7 +5,6 @@ import (
 	"errors"
 	"html/template"
 	"net/http"
-	"strings"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/session"
@@ -77,8 +76,8 @@ func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
-	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	email := user.CanonicalEmail(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
 	next := r.PostFormValue("next")
 	refuse := func(msg string) { s.loginScreen(w, r, http.StatusUnprocessableEntity, email, next, msg) }
@@ -87,9 +86,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		refuse(errMissingCredentials)
 		return
 	}
+	// Charge both limiters now as if this attempt fails: concurrent requests
+	// then cannot all pass the check before any failure is recorded. A
+	// success gives the hit back below.
 	ip := limitCheck{l: s.limits.loginIP, key: s.clientIP(r)}
-	em := limitCheck{l: s.limits.loginEmail, key: email, secret: true}
-	if retry, blocked := s.tripped(ip, em); blocked {
+	em := limitCheck{l: s.limits.loginEmail, key: emailKey(email)}
+	if retry, ok := s.reserve(ip, em); !ok {
 		s.loginScreen(w, r, http.StatusTooManyRequests, email, next, tooMany(w, retry))
 		return
 	}
@@ -110,11 +112,10 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		ok, needsRehash = s.hasher.Verify(password, hash)
 	}
 	if !found || !ok {
-		s.limits.loginIP.Record(ip.key)
-		s.limits.loginEmail.Record(em.key)
 		refuse(errWrongCredentials)
 		return
 	}
+	s.limits.loginIP.Refund(ip.key)
 	s.limits.loginEmail.Clear(em.key)
 	if needsRehash {
 		s.upgradeHash(r, u.ID, password)

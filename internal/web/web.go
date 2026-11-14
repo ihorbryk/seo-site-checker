@@ -34,6 +34,10 @@ func ParseTemplates() (*template.Template, error) {
 
 type crumb struct{ Label, Href string }
 
+// maxFormBytes caps the body of the credential forms (sign-in, registration,
+// change password).
+const maxFormBytes = 1 << 16
+
 // Options configures the web handler beyond its database and River client.
 type Options struct {
 	// Argon2 are the cost parameters new password hashes are made with.
@@ -94,12 +98,14 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger, opts Op
 	for _, rt := range s.routes() {
 		mux.Handle(rt.pattern, s.guard(rt.access, rt.handler))
 	}
-	mws := []middleware{recoverPanics(log), logRequests(log)}
+	// No CSRF tokens: refuse cross-origin unsafe requests via Fetch Metadata /
+	// Origin. HSTS is outermost so those refusals carry it too.
+	cop := http.NewCrossOriginProtection()
+	mws := []middleware{cop.Handler, recoverPanics(log), logRequests(log)}
 	if !opts.InsecureCookies {
 		mws = append([]middleware{hsts}, mws...)
 	}
-	// No CSRF tokens: refuse cross-origin unsafe requests via Fetch Metadata / Origin.
-	return http.NewCrossOriginProtection().Handler(chain(mux, mws...)), nil
+	return chain(mux, mws...), nil
 }
 
 func (s *server) home(w http.ResponseWriter, r *http.Request) {

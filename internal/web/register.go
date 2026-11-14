@@ -21,13 +21,12 @@ func (s *server) registerPage(w http.ResponseWriter, r *http.Request) {
 
 // register creates a User and signs them in: validate, create, start a session.
 func (s *server) register(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
-	ip := limitCheck{l: s.limits.registerIP, key: s.clientIP(r)}
-	if retry, blocked := s.tripped(ip); blocked {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	// Every attempt counts, successes included.
+	if retry, ok := s.reserve(limitCheck{l: s.limits.registerIP, key: s.clientIP(r)}); !ok {
 		s.registerScreen(w, r, http.StatusTooManyRequests, r.PostFormValue("email"), "", "", tooMany(w, retry))
 		return
 	}
-	s.limits.registerIP.Record(ip.key)
 	email := r.PostFormValue("email")
 	password := r.PostFormValue("password")
 

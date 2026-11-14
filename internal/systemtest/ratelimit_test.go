@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ihorbryk/seo-site-checker/internal/systemtest"
@@ -142,5 +144,58 @@ func TestChangePasswordAnswers429AfterTenWrongCurrentPasswords(t *testing.T) {
 	other := s.NewUser()
 	if w := other.Post("/password", changeForm("wrong", newPassword)); w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("another User: status %d", w.Code)
+	}
+}
+
+func TestAParallelBurstOfFailuresCannotExceedTheEmailLimit(t *testing.T) {
+	s := systemtest.New(t)
+	visitor := s.SignedOut()
+	var wrong, limited atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch visitor.PostPlain("/login", wrongLogin(s.User.Email)).Code {
+			case http.StatusUnprocessableEntity:
+				wrong.Add(1)
+			case http.StatusTooManyRequests:
+				limited.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wrong.Load() != 10 || limited.Load() != 30 {
+		t.Errorf("%d attempts checked, %d refused; want exactly 10 and 30", wrong.Load(), limited.Load())
+	}
+}
+
+func TestAHugeEmailIsLimitedLikeAnyOther(t *testing.T) {
+	s := systemtest.New(t)
+	visitor := s.SignedOut()
+	huge := strings.Repeat("a", 60000) + "@example.test"
+	for i := 0; i < 10; i++ {
+		visitor.PostPlain("/login", wrongLogin(huge))
+	}
+	wantTooMany(t, visitor.PostPlain("/login", wrongLogin(huge)))
+}
+
+func TestOneWarnLinePerRateLimitTrip(t *testing.T) {
+	s := systemtest.New(t, systemtest.WebLog())
+	visitor := s.SignedOut()
+	for i := 0; i < 10; i++ {
+		visitor.PostPlain("/login", wrongLogin(s.User.Email))
+	}
+	for i := 0; i < 5; i++ {
+		wantTooMany(t, visitor.PostPlain("/login", wrongLogin(s.User.Email)))
+	}
+	var warns []string
+	for _, l := range s.WebLogLines() {
+		if strings.Contains(l, "level=WARN") {
+			warns = append(warns, l)
+		}
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "login-email") || strings.Contains(warns[0], s.User.Email) {
+		t.Errorf("warn lines %q; want one for login-email without the raw email", warns)
 	}
 }
