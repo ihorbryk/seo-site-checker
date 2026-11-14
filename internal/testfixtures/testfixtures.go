@@ -109,12 +109,56 @@ func Project(t testing.TB, db dbgen.DBTX, opts ...ProjectOption) dbgen.Project {
 	return p
 }
 
-// Check inserts a queued manual Check of the Project.
-func Check(t testing.TB, db dbgen.DBTX, project dbgen.Project) dbgen.Check {
+// CheckOption customises a Check fixture.
+type CheckOption func(*checkParams)
+
+type checkParams struct {
+	state     string
+	createdAt time.Time
+}
+
+// WithCheckState sets the Check's state (queued, running, cancelling,
+// finished, cancelled). A Check past queued gets started_at, and an ended one
+// finished_at, both at its creation time.
+func WithCheckState(state string) CheckOption {
+	return func(p *checkParams) { p.state = state }
+}
+
+// WithCheckCreatedAt sets the Check's creation time.
+func WithCheckCreatedAt(at time.Time) CheckOption {
+	return func(p *checkParams) { p.createdAt = at }
+}
+
+// Check inserts a manual Check of the Project through the real CreateCheck,
+// so it gets the Project's next Check number. Default: queued, created now.
+// Tests create Checks only here (mise run lint:checkinserts).
+func Check(t testing.TB, db dbgen.DBTX, project dbgen.Project, opts ...CheckOption) dbgen.Check {
 	t.Helper()
-	c, err := dbgen.New(db).CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: project.ID, Trigger: "manual"}) // pageliterals:ok Check trigger, not a Page origin
+	var params checkParams
+	for _, o := range opts {
+		o(&params)
+	}
+	ctx := context.Background()
+	q := dbgen.New(db)
+	c, err := q.CreateCheck(ctx, dbgen.CreateCheckParams{ProjectID: project.ID, Trigger: "manual"}) // pageliterals:ok Check trigger, not a Page origin
 	if err != nil {
 		t.Fatalf("testfixtures: check: %v", err)
+	}
+	if !params.createdAt.IsZero() {
+		if err := q.SetCheckCreatedAt(ctx, dbgen.SetCheckCreatedAtParams{ID: c.ID, CreatedAt: params.createdAt}); err != nil {
+			t.Fatalf("testfixtures: check created_at: %v", err)
+		}
+	}
+	if params.state != "" {
+		if _, err := db.Exec(ctx, `UPDATE checks SET state = $2::text,
+			started_at = CASE WHEN $2::text <> 'queued' THEN created_at END,
+			finished_at = CASE WHEN $2::text IN ('finished', 'cancelled') THEN created_at END
+			WHERE id = $1`, c.ID, params.state); err != nil {
+			t.Fatalf("testfixtures: check state: %v", err)
+		}
+	}
+	if c, err = q.GetCheck(ctx, c.ID); err != nil {
+		t.Fatalf("testfixtures: get check: %v", err)
 	}
 	return c
 }

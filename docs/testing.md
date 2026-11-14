@@ -43,14 +43,18 @@ and `DROP DATABASE` each.
   (`.fetched`, `.tier`, `#body-diff`, ...) are systemtest hooks: keep them, and
   keep header rows as plain `<tr>`s since tests count rows by position.
 - **Lint**: `mise run lint` runs `lint:fmt`, `lint:vet`, `lint:sqlc`,
-  `lint:tidy`, `lint:literals` and `lint:css`; run one by name to see only its
+  `lint:tidy`, `lint:literals`, `lint:checkinserts` and `lint:css`; run one by name to see only its
   output. `lint:sqlc`, `lint:tidy` and `lint:css` compare against the working
   tree with `git diff`, so commit regenerated `internal/dbgen`,
   `go.mod`/`go.sum` and `app.css` before `mise run lint`.
 - **Guards**: `lint:literals` rejects Page state, origin and event string
   literals outside `internal/page`; mark a same-spelling literal with
   `// pageliterals:ok <reason>`. `internal/worker` has a test that only
-  `finalize.go` writes `page_events`.
+  `finalize.go` writes `page_events`. `lint:checkinserts` rejects
+  `INSERT INTO checks` in Go code outside `db/` and `internal/dbgen`: tests
+  create Checks with `testfixtures.Check` (options `WithCheckState`,
+  `WithCheckCreatedAt`), which goes through `CreateCheck` and so keeps the
+  Project's Check number counter in step.
 - Review judgement calls live in `CODING_STANDARDS.md`.
 
 # The system harness (`internal/systemtest`)

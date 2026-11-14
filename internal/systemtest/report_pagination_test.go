@@ -8,11 +8,14 @@ import (
 	"testing"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/systemtest"
+	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 )
 
-// Like the other pagination tests, these Reports are built from rows inserted
-// up front with no worker running, and their order is the behaviour under
+// Like the other pagination tests, these Reports are built up front with no
+// worker running (the Check through testfixtures.Check, the rest as raw
+// rows), and their order is the behaviour under
 // test, so rows are compared in order.
 
 // largeReport is an ended Check of shop.test whose Report has 120 changed
@@ -25,9 +28,7 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 	t.Helper()
 	p := s.AddProject("shop.test")
 	s.SaveRequestSettings(p, settingsForm("/private/**\n"))
-	checkID := count(t, s, `INSERT INTO checks (project_id, trigger, state, number, started_at, finished_at)
-		VALUES ($1, 'manual', 'finished', 1, now(), now()) RETURNING id`, p.ID)
-	s.Exec(`UPDATE projects SET last_check_number = 1 WHERE id = $1`, p.ID)
+	checkID := testfixtures.Check(t, s.Pool, p, testfixtures.WithCheckState(check.StateFinished)).ID
 	pages := func(prefix string, n int, state string) {
 		s.Exec(`INSERT INTO pages (project_id, url, origin, state)
 			SELECT $1, 'https://shop.test/' || $2::text || lpad(n::text, 3, '0'), 'discovered', $4
@@ -72,7 +73,7 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 		SELECT $1, id, CASE WHEN url ~ '/[ci][a-z]*[0-9]+$' THEN 'new' WHEN url ~ '/u[0-9]+$' THEN 'vanished' ELSE 'retired' END
 		FROM pages WHERE project_id = $2 AND url ~ '/([cuf]|ign)[0-9]+$'`, checkID, p.ID)
 	s.Exec(`UPDATE checks SET count_new = 120, count_vanished = 30, count_retired = 75, count_failures = 75, count_skipped = 60 WHERE id = $1`, checkID)
-	return s.CheckPath(int64(checkID))
+	return s.CheckPath(checkID)
 }
 
 // numbered is "https://shop.test/<prefix>NNN" for each n.
