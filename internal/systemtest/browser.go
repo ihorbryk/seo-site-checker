@@ -37,6 +37,12 @@ func (s *System) NewUser() *Browser {
 	return &Browser{User: u, s: s, token: testfixtures.Session(s.T, s.Pool, u)}
 }
 
+// SignInAs returns another Browser (a second device) signed in as u.
+func (s *System) SignInAs(u dbgen.User) *Browser {
+	s.T.Helper()
+	return &Browser{User: u, s: s, token: testfixtures.Session(s.T, s.Pool, u)}
+}
+
 // SignedOut returns a Browser with no session cookie.
 func (s *System) SignedOut() *Browser { return &Browser{s: s} }
 

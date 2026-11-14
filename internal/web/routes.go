@@ -31,6 +31,8 @@ func (s *server) routes() []route {
 		{"POST /login", public, h(s.login)},
 
 		{"POST /logout", signedIn, h(s.logout)},
+		{"GET /password", signedIn, h(s.passwordPage)},
+		{"POST /password", signedIn, h(s.changePassword)},
 		{"GET /{$}", signedIn, h(s.home)},
 		{"POST /projects", signedIn, h(s.addProject)},
 		{"GET /p/{id}", signedIn, h(s.projectChecks)},
