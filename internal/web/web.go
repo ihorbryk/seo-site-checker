@@ -98,7 +98,8 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger, opts Op
 	if !opts.InsecureCookies {
 		mws = append([]middleware{hsts}, mws...)
 	}
-	return chain(mux, mws...), nil
+	// No CSRF tokens: refuse cross-origin unsafe requests via Fetch Metadata / Origin.
+	return http.NewCrossOriginProtection().Handler(chain(mux, mws...)), nil
 }
 
 func (s *server) home(w http.ResponseWriter, r *http.Request) {

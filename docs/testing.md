@@ -98,7 +98,10 @@ other.AddProject("shop.test")        // through the form; found by owner + domai
 (`systemtest.InsecureCookies()`); add one per new switch. `WebQueries` leaves
 out the session lookup every signed-in request makes. Rows built straight in
 the database (`testfixtures.Project` defaults to a fresh owner; pass
-`WithOwner(s.User)` to give it to the default User).
+`WithOwner(s.User)` to give it to the default User; `testfixtures.Check` and
+`Snapshot` build the rows under it). Routes declared `owned(kind)` run one
+ownership query (`ProjectOwner`, `PageOwner`, `CheckOwner`, `SnapshotOwner`)
+first, so it shows up in `WebQueries`.
 
 Conventions:
 
