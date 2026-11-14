@@ -38,3 +38,8 @@ WHERE token_hash = sqlc.arg(token_hash) AND last_seen_at < sqlc.arg(stale_before
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1;
+
+-- name: DeleteExpiredSessions :execrows
+-- Housekeeping only: lookups already ignore sessions past either expiry.
+DELETE FROM sessions
+WHERE expires_at <= sqlc.arg(now)::timestamptz OR last_seen_at <= sqlc.arg(idle_cutoff)::timestamptz;

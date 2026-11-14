@@ -10,6 +10,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/scheduler"
+	"github.com/ihorbryk/seo-site-checker/internal/session"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
 	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 	"github.com/jackc/pgx/v5"
@@ -243,5 +244,36 @@ func TestOnlyDueProjectsGetChecksAndNothingIsInsertedOtherwise(t *testing.T) {
 	var jobs int
 	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM river_job WHERE kind = 'start_check'`).Scan(&jobs); err != nil || jobs != 1 {
 		t.Fatalf("%d StartCheck jobs (err %v), want 1", jobs, err)
+	}
+}
+
+func TestHousekeepPrunesExpiredSessionsAndKeepsLiveOnes(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	u := testfixtures.User(t, e.pool)
+	mk := func(created time.Time) string {
+		raw, err := session.Create(ctx, e.pool, u.ID, created)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	live := mk(t0.Add(-24 * time.Hour))
+	mk(t0.Add(-session.IdleTimeout - time.Hour)) // idle too long
+	absolute := mk(t0.Add(-session.MaxAge - time.Hour))
+	// Used just now, but past its 30-day cap.
+	if _, err := e.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1`, session.HashToken(absolute), t0); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scheduler.Housekeep(ctx, e.pool, t0); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := dbgen.New(e.pool).CountSessionsByUser(ctx, u.ID); err != nil || n != 1 {
+		t.Fatalf("sessions left = %d (err %v), want 1", n, err)
+	}
+	if _, ok, _ := session.Lookup(ctx, e.pool, live, t0); !ok {
+		t.Error("live session was pruned")
 	}
 }

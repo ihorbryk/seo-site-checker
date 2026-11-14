@@ -66,6 +66,25 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions
+WHERE expires_at <= $1::timestamptz OR last_seen_at <= $2::timestamptz
+`
+
+type DeleteExpiredSessionsParams struct {
+	Now        time.Time
+	IdleCutoff time.Time
+}
+
+// Housekeeping only: lookups already ignore sessions past either expiry.
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, arg DeleteExpiredSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredSessions, arg.Now, arg.IdleCutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
