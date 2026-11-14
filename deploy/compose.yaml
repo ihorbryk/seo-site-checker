@@ -2,14 +2,17 @@
 # this file, set VERSION and POSTGRES_PASSWORD, then run `docker compose up -d`.
 # See "Run in production with Docker Compose" in the README.
 
+x-database-url: &database-url postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/seo_checker?sslmode=disable
+
 x-app-env: &app-env
-  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/seo_checker?sslmode=disable
+  DATABASE_URL: *database-url
   LOG_LEVEL: ${LOG_LEVEL:-info}
   WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-20}
   ARGON2_MEMORY_KIB: ${ARGON2_MEMORY_KIB:-19456}
   ARGON2_TIME: ${ARGON2_TIME:-2}
   ARGON2_THREADS: ${ARGON2_THREADS:-1}
   DENY_REGISTRATION: ${DENY_REGISTRATION:-true}
+  # Empty is the same as unset in internal/config.
   TRUSTED_PROXY_HEADER: ${TRUSTED_PROXY_HEADER:-}
 
 services:
@@ -33,7 +36,7 @@ services:
     command: ["/migrate"]
     restart: "no"
     environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/seo_checker?sslmode=disable
+      DATABASE_URL: *database-url
       BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:-}
     depends_on:
       postgres:
@@ -75,8 +78,8 @@ services:
     profiles: ["tools"]
     environment: *app-env
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres-data:

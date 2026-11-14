@@ -25,18 +25,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
 		log.Error("DATABASE_URL is required")
 		os.Exit(1)
 	}
-	sqlDB, err := sql.Open("pgx", url)
+	sqlDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Error("open database", "err", err)
 		os.Exit(1)
 	}
 
-	n, err := migrate(ctx, sqlDB, log)
+	n, err := applyPending(ctx, sqlDB, log)
 	sqlDB.Close()
 	if err != nil {
 		log.Error("migration failed", "err", err)
@@ -45,12 +45,22 @@ func main() {
 	log.Info("migrations done", "applied", n)
 }
 
-// migrate applies every pending migration, logging each, and returns how many
-// were applied.
-func migrate(ctx context.Context, sqlDB *sql.DB, log *slog.Logger) (int, error) {
+// newProvider builds the goose provider over the embedded migrations. goose
+// reads env vars (BOOTSTRAP_EMAIL) when it parses the files.
+func newProvider(sqlDB *sql.DB) (*goose.Provider, error) {
 	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, db.Migrations())
 	if err != nil {
-		return 0, fmt.Errorf("create provider: %w", err)
+		return nil, fmt.Errorf("create provider: %w", err)
+	}
+	return p, nil
+}
+
+// applyPending applies every pending migration, logging each, and returns how
+// many were applied.
+func applyPending(ctx context.Context, sqlDB *sql.DB, log *slog.Logger) (int, error) {
+	p, err := newProvider(sqlDB)
+	if err != nil {
+		return 0, err
 	}
 	results, err := p.Up(ctx)
 	for _, r := range results {
