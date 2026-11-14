@@ -15,6 +15,11 @@ type Config struct {
 	WebAddr           string
 	LogLevel          slog.Level
 	WorkerConcurrency int
+
+	// argon2id cost parameters for password hashing.
+	Argon2MemoryKiB uint32
+	Argon2Time      uint32
+	Argon2Threads   uint8
 }
 
 // Load builds a Config from getenv (os.Getenv in the binaries). Unset
@@ -24,6 +29,9 @@ func Load(getenv func(string) string) (Config, error) {
 		DatabaseURL:       getenv("DATABASE_URL"),
 		WebAddr:           orDefault(getenv("WEB_ADDR"), "127.0.0.1:8089"),
 		WorkerConcurrency: 20,
+		Argon2MemoryKiB:   19456,
+		Argon2Time:        2,
+		Argon2Threads:     1,
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
@@ -38,7 +46,35 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		c.WorkerConcurrency = n
 	}
+	var err error
+	if c.Argon2MemoryKiB, err = uintVar(getenv, "ARGON2_MEMORY_KIB", c.Argon2MemoryKiB, 8, 1<<22); err != nil {
+		return c, err
+	}
+	if c.Argon2Time, err = uintVar(getenv, "ARGON2_TIME", c.Argon2Time, 1, 100); err != nil {
+		return c, err
+	}
+	threads, err := uintVar(getenv, "ARGON2_THREADS", uint32(c.Argon2Threads), 1, 255)
+	if err != nil {
+		return c, err
+	}
+	c.Argon2Threads = uint8(threads)
+	if c.Argon2MemoryKiB < 8*uint32(c.Argon2Threads) {
+		return c, errors.New("ARGON2_MEMORY_KIB must be at least 8 times ARGON2_THREADS")
+	}
 	return c, nil
+}
+
+// uintVar reads an integer in [lo, hi] from name, or returns def when unset.
+func uintVar(getenv func(string) string, name string, def, lo, hi uint32) (uint32, error) {
+	v := getenv(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil || n < uint64(lo) || n > uint64(hi) {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d, got %q", name, lo, hi, v)
+	}
+	return uint32(n), nil
 }
 
 func orDefault(v, def string) string {

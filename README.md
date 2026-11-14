@@ -40,6 +40,9 @@ Environment variables only. `mise.toml` supplies the development defaults, and p
 | `WEB_ADDR` | `127.0.0.1:8089` | Address the web UI listens on |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `WORKER_CONCURRENCY` | `20` | Jobs one worker process runs at once |
+| `ARGON2_MEMORY_KIB` | `19456` | argon2id memory cost in KiB for password hashing |
+| `ARGON2_TIME` | `2` | argon2id iterations |
+| `ARGON2_THREADS` | `1` | argon2id parallelism |
 | `DEMO_DOMAIN` | unset | Used by `mise run seed` only: creates a manual-only demo Project for this domain |
 
 ## Development

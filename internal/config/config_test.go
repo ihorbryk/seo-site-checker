@@ -46,3 +46,37 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadArgon2Defaults(t *testing.T) {
+	c, err := config.Load(env(map[string]string{"DATABASE_URL": "u"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Argon2MemoryKiB != 19456 || c.Argon2Time != 2 || c.Argon2Threads != 1 {
+		t.Fatalf("defaults: %+v", c)
+	}
+}
+
+func TestLoadArgon2Overrides(t *testing.T) {
+	c, err := config.Load(env(map[string]string{
+		"DATABASE_URL": "u", "ARGON2_MEMORY_KIB": "47104", "ARGON2_TIME": "1", "ARGON2_THREADS": "4",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Argon2MemoryKiB != 47104 || c.Argon2Time != 1 || c.Argon2Threads != 4 {
+		t.Fatalf("overrides: %+v", c)
+	}
+}
+
+func TestLoadRejectsBadArgon2(t *testing.T) {
+	for _, m := range []map[string]string{
+		{"ARGON2_MEMORY_KIB": "0"}, {"ARGON2_MEMORY_KIB": "lots"}, {"ARGON2_TIME": "0"},
+		{"ARGON2_THREADS": "0"}, {"ARGON2_THREADS": "256"}, {"ARGON2_MEMORY_KIB": "4"},
+	} {
+		m["DATABASE_URL"] = "u"
+		if _, err := config.Load(env(m)); err == nil {
+			t.Errorf("%v: want an error", m)
+		}
+	}
+}
