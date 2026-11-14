@@ -83,7 +83,7 @@ func (s *server) snapshotPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckID,
+	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckNumber,
 		crumb{Label: fmt.Sprintf("Snapshot #%d", snap.ID)})
 	s.render(w, r, "snapshot", fmt.Sprintf("Snapshot #%d", snap.ID), crumbs, data)
 }

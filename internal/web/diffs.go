@@ -79,11 +79,11 @@ func (s *server) diffPage(w http.ResponseWriter, r *http.Request) {
 	if u, err := url.Parse(snap.Url); err == nil && u.RequestURI() != "" {
 		path = u.RequestURI()
 	}
-	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckID, crumb{Label: "Diff " + path})
+	crumbs := checkCrumbs(dbgen.Project{ID: snap.ProjectID, Domain: snap.Domain}, snap.CheckNumber, crumb{Label: "Diff " + path})
 	data := map[string]any{
 		"After": snap, "Path": path, "AfterFetched": formatTime(snap.FetchedAt, true),
 		// The Check whose frozen Noise rules this Diff used (shown by #31).
-		"NoiseCheckID": check.ID,
+		"NoiseCheckNumber": snap.CheckNumber,
 	}
 	title := "Diff " + path
 

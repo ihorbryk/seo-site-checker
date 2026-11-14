@@ -60,7 +60,8 @@ func (q *Queries) CountPageHistory(ctx context.Context, pageID int64) (int64, er
 
 const getPage = `-- name: GetPage :one
 SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pg.reactivated_check_id, pr.domain, pr.exclude_patterns,
-    COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
+    COALESCE((SELECT c.number FROM fetches f JOIN checks c ON c.id = f.check_id
+              WHERE f.page_id = pg.id ORDER BY f.check_id LIMIT 1), 0)::bigint AS first_check_number
 FROM pages pg JOIN projects pr ON pr.id = pg.project_id
 WHERE pg.id = $1
 `
@@ -76,7 +77,7 @@ type GetPageRow struct {
 	ReactivatedCheckID pgtype.Int8
 	Domain             string
 	ExcludePatterns    []string
-	FirstCheckID       int64
+	FirstCheckNumber   int64
 }
 
 func (q *Queries) GetPage(ctx context.Context, id int64) (GetPageRow, error) {
@@ -93,7 +94,7 @@ func (q *Queries) GetPage(ctx context.Context, id int64) (GetPageRow, error) {
 		&i.ReactivatedCheckID,
 		&i.Domain,
 		&i.ExcludePatterns,
-		&i.FirstCheckID,
+		&i.FirstCheckNumber,
 	)
 	return i, err
 }
@@ -112,7 +113,7 @@ func (q *Queries) IgnorePage(ctx context.Context, id int64) (int64, error) {
 }
 
 const listPageHistory = `-- name: ListPageHistory :many
-SELECT f.check_id, c.started_at AS check_started_at,
+SELECT f.check_id, c.number AS check_number, c.started_at AS check_started_at,
     f.outcome, f.skip_reason, f.failure_kind, f.message, f.duration_ms,
     s.id AS snapshot_id, s.status, b.size AS body_size,
     d.tier, d.status_changed, d.headers_changed, d.seo_changed, d.body_changed,
@@ -136,6 +137,7 @@ type ListPageHistoryParams struct {
 
 type ListPageHistoryRow struct {
 	CheckID        int64
+	CheckNumber    int64
 	CheckStartedAt pgtype.Timestamptz
 	Outcome        pgtype.Text
 	SkipReason     pgtype.Text
@@ -166,6 +168,7 @@ func (q *Queries) ListPageHistory(ctx context.Context, arg ListPageHistoryParams
 		var i ListPageHistoryRow
 		if err := rows.Scan(
 			&i.CheckID,
+			&i.CheckNumber,
 			&i.CheckStartedAt,
 			&i.Outcome,
 			&i.SkipReason,
@@ -198,7 +201,8 @@ SELECT pg.id, pg.url, pg.state, pg.origin, pg.orphan_streak,
     COALESCE(changed.snapshot_id, 0)::bigint AS last_changed_snapshot_id,
     COALESCE(changed.fetched_at, 'epoch'::timestamptz)::timestamptz AS last_changed_at,
     (SELECT count(*) FROM snapshots s WHERE s.page_id = pg.id)::bigint AS snapshots,
-    COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
+    COALESCE((SELECT c.number FROM fetches f JOIN checks c ON c.id = f.check_id
+              WHERE f.page_id = pg.id ORDER BY f.check_id LIMIT 1), 0)::bigint AS first_check_number
 FROM pages pg
 LEFT JOIN LATERAL (
     SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
@@ -222,12 +226,12 @@ type ListPagePoolRowsRow struct {
 	LastChangedSnapshotID int64
 	LastChangedAt         time.Time
 	Snapshots             int64
-	FirstCheckID          int64
+	FirstCheckNumber      int64
 }
 
 // The Page pool tab's columns for the given Pages, by URL. last_status is 0 for a Page with no
 // Snapshot yet; last_changed_snapshot_id is 0 when no Snapshot of the Page has
-// a non-empty Diff; first_check_id is 0 for a Page never fetched yet.
+// a non-empty Diff; first_check_number is 0 for a Page never fetched yet.
 func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPagePoolRowsRow, error) {
 	rows, err := q.db.Query(ctx, listPagePoolRows, ids)
 	if err != nil {
@@ -247,7 +251,7 @@ func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPage
 			&i.LastChangedSnapshotID,
 			&i.LastChangedAt,
 			&i.Snapshots,
-			&i.FirstCheckID,
+			&i.FirstCheckNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -301,11 +305,11 @@ func (q *Queries) ListPagePoolStates(ctx context.Context, projectID int64) ([]Li
 }
 
 const listProjectSummaries = `-- name: ListProjectSummaries :many
-SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id,
+SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id, p.last_check_number,
     (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages,
-    COALESCE(lc.id, 0)::bigint AS last_check_id,
+    COALESCE(lc.number, 0)::bigint AS last_check_number,
     COALESCE(lc.state, '')::text AS last_check_state,
-    COALESCE(rc.id, 0)::bigint AS report_check_id,
+    COALESCE(rc.number, 0)::bigint AS report_check_number,
     COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
               WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier <> 'empty'), 0)::bigint AS report_changed,
     COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
@@ -316,33 +320,34 @@ SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.
     EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
             WHERE f.check_id = rc.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS report_seed_failed
 FROM projects p
-LEFT JOIN LATERAL (SELECT c.id, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
-LEFT JOIN LATERAL (SELECT c.id, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
+LEFT JOIN LATERAL (SELECT c.id, c.number, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
+LEFT JOIN LATERAL (SELECT c.id, c.number, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
 WHERE p.owner_id = $1
 ORDER BY p.domain
 `
 
 type ListProjectSummariesRow struct {
-	ID               int64
-	Domain           string
-	Schedule         string
-	UserAgent        string
-	TimeoutS         int32
-	MaxParallel      int32
-	RespectRobots    bool
-	CustomHeaders    []byte
-	ExcludePatterns  []string
-	CreatedAt        time.Time
-	OwnerID          int64
-	ActivePages      int64
-	LastCheckID      int64
-	LastCheckState   string
-	ReportCheckID    int64
-	ReportChanged    int64
-	ReportCritical   int64
-	ReportSeo        int64
-	ReportFailed     int64
-	ReportSeedFailed bool
+	ID                int64
+	Domain            string
+	Schedule          string
+	UserAgent         string
+	TimeoutS          int32
+	MaxParallel       int32
+	RespectRobots     bool
+	CustomHeaders     []byte
+	ExcludePatterns   []string
+	CreatedAt         time.Time
+	OwnerID           int64
+	LastCheckNumber   int64
+	ActivePages       int64
+	LastCheckNumber_2 int64
+	LastCheckState    string
+	ReportCheckNumber int64
+	ReportChanged     int64
+	ReportCritical    int64
+	ReportSeo         int64
+	ReportFailed      int64
+	ReportSeedFailed  bool
 }
 
 // Projects with their active Page count, newest Check (any state) and the
@@ -368,10 +373,11 @@ func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]Li
 			&i.ExcludePatterns,
 			&i.CreatedAt,
 			&i.OwnerID,
+			&i.LastCheckNumber,
 			&i.ActivePages,
-			&i.LastCheckID,
+			&i.LastCheckNumber_2,
 			&i.LastCheckState,
-			&i.ReportCheckID,
+			&i.ReportCheckNumber,
 			&i.ReportChanged,
 			&i.ReportCritical,
 			&i.ReportSeo,

@@ -89,6 +89,7 @@ type Check struct {
 	RobotsBody            []byte
 	RobotsFetchedAt       pgtype.Timestamptz
 	RobotsFailureKind     pgtype.Text
+	Number                int64
 }
 
 type Diff struct {
@@ -165,6 +166,7 @@ type Project struct {
 	ExcludePatterns []string
 	CreatedAt       time.Time
 	OwnerID         int64
+	LastCheckNumber int64
 }
 
 type RiverJob struct {

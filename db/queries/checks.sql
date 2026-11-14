@@ -1,8 +1,21 @@
 -- name: CreateCheck :one
-INSERT INTO checks (project_id, trigger) VALUES ($1, $2) RETURNING *;
+-- Inserts a queued Check with the Project's next Check number. Raising the
+-- counter locks the Project row until the transaction ends, so concurrent
+-- creations in one Project get consecutive numbers (ADR 0001).
+WITH n AS (
+    UPDATE projects SET last_check_number = last_check_number + 1
+    WHERE id = sqlc.arg(project_id)
+    RETURNING last_check_number
+)
+INSERT INTO checks (project_id, trigger, number)
+SELECT sqlc.arg(project_id), sqlc.arg(trigger), n.last_check_number FROM n
+RETURNING *;
 
 -- name: GetCheck :one
 SELECT * FROM checks WHERE id = $1;
+
+-- name: GetCheckByNumber :one
+SELECT * FROM checks WHERE project_id = $1 AND number = $2;
 
 -- name: LockCheck :one
 SELECT * FROM checks WHERE id = $1 FOR UPDATE;

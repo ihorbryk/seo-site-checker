@@ -354,10 +354,31 @@ func (s *System) RunCheck(p dbgen.Project) int64 {
 	s.T.Helper()
 	w := s.Post("/p/"+itoa(p.ID)+"/checks", url.Values{})
 	loc := w.Header().Get("HX-Redirect")
-	if w.Code != 200 || !strings.HasPrefix(loc, "/c/") {
+	prefix := "/p/" + itoa(p.ID) + "/c/"
+	if w.Code != 200 || !strings.HasPrefix(loc, prefix) {
 		s.T.Fatalf("run check: status %d, HX-Redirect %q", w.Code, loc)
 	}
-	return atoi(s.T, strings.TrimPrefix(loc, "/c/"))
+	return s.CheckID(p, atoi(s.T, strings.TrimPrefix(loc, prefix)))
+}
+
+// CheckID returns the id of the Project's Check with the Check number.
+func (s *System) CheckID(p dbgen.Project, number int64) int64 {
+	s.T.Helper()
+	c, err := s.Q.GetCheckByNumber(context.Background(), dbgen.GetCheckByNumberParams{ProjectID: p.ID, Number: number})
+	if err != nil {
+		s.T.Fatalf("no Check #%d in Project %d: %v", number, p.ID, err)
+	}
+	return c.ID
+}
+
+// CheckPath is the URL of the Check with the id: /p/{project}/c/{number}.
+func (s *System) CheckPath(id int64) string {
+	s.T.Helper()
+	c, err := s.Q.GetCheck(context.Background(), id)
+	if err != nil {
+		s.T.Fatalf("no Check %d: %v", id, err)
+	}
+	return "/p/" + itoa(c.ProjectID) + "/c/" + itoa(c.Number)
 }
 
 // AddPage submits the Page pool tab's Add Page form and returns the response.
@@ -399,7 +420,7 @@ func (s *System) WaitForCheck(id int64) *goquery.Document {
 			s.T.Fatal(err)
 		}
 		if !check.Active(c.State) {
-			w := s.Get("/c/" + itoa(id))
+			w := s.Get(s.CheckPath(id))
 			if w.Code != 200 {
 				s.T.Fatalf("report of Check %d: status %d", id, w.Code)
 			}
@@ -427,7 +448,7 @@ func (s *System) WaitFor(cond func() bool) {
 // Cancel presses Cancel on the Check's page.
 func (s *System) Cancel(checkID int64) {
 	s.T.Helper()
-	if w := s.Post("/c/"+itoa(checkID)+"/cancel", url.Values{}); w.Code != 200 {
+	if w := s.Post(s.CheckPath(checkID)+"/cancel", url.Values{}); w.Code != 200 {
 		s.T.Fatalf("cancel Check %d: status %d: %s", checkID, w.Code, w.Body.String())
 	}
 }

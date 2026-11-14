@@ -66,7 +66,7 @@ func (q *Queries) GetDiffBaseline(ctx context.Context, snapshotID int64) (int64,
 }
 
 const getSnapshotView = `-- name: GetSnapshotView :one
-SELECT s.id, s.page_id, s.check_id, s.fetched_at, s.status, s.headers, s.seo_fields,
+SELECT s.id, s.page_id, s.check_id, c.number AS check_number, s.fetched_at, s.status, s.headers, s.seo_fields,
     p.url, p.project_id, pr.domain,
     f.duration_ms,
     s.body_sha256,
@@ -74,25 +74,27 @@ SELECT s.id, s.page_id, s.check_id, s.fetched_at, s.status, s.headers, s.seo_fie
 FROM snapshots s
 JOIN pages p ON p.id = s.page_id
 JOIN projects pr ON pr.id = p.project_id
+JOIN checks c ON c.id = s.check_id
 JOIN fetches f ON f.id = s.id
 LEFT JOIN bodies b ON b.project_id = p.project_id AND b.sha256 = s.body_sha256
 WHERE s.id = $1
 `
 
 type GetSnapshotViewRow struct {
-	ID         int64
-	PageID     int64
-	CheckID    int64
-	FetchedAt  time.Time
-	Status     int32
-	Headers    []byte
-	SeoFields  []byte
-	Url        string
-	ProjectID  int64
-	Domain     string
-	DurationMs pgtype.Int4
-	BodySha256 []byte
-	BodySize   pgtype.Int4
+	ID          int64
+	PageID      int64
+	CheckID     int64
+	CheckNumber int64
+	FetchedAt   time.Time
+	Status      int32
+	Headers     []byte
+	SeoFields   []byte
+	Url         string
+	ProjectID   int64
+	Domain      string
+	DurationMs  pgtype.Int4
+	BodySha256  []byte
+	BodySize    pgtype.Int4
 }
 
 func (q *Queries) GetSnapshotView(ctx context.Context, id int64) (GetSnapshotViewRow, error) {
@@ -102,6 +104,7 @@ func (q *Queries) GetSnapshotView(ctx context.Context, id int64) (GetSnapshotVie
 		&i.ID,
 		&i.PageID,
 		&i.CheckID,
+		&i.CheckNumber,
 		&i.FetchedAt,
 		&i.Status,
 		&i.Headers,

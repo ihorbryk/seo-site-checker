@@ -8,9 +8,9 @@
 <tr><th>Check</th><th>Trigger</th><th>Status</th><th>Started</th><th>Duration</th><th>Fetched</th><th>Failures</th><th>Changed</th><th>New</th><th>Vanished</th><th>Retired</th></tr>
 
 {{range .Checks}}<tr>
-<td><a href="/c/{{.ID}}">#{{.ID}}</a></td><td class="c-trigger">{{.Trigger}}</td>
+<td><a href="/p/{{$.Project.ID}}/c/{{.Number}}">#{{.Number}}</a></td><td class="c-trigger">{{.Trigger}}</td>
 <td><div class="flex flex-wrap items-center gap-1">{{template "checkState" .State}}{{if .Partial}}<span class="badge badge-sm badge-warning badge-outline partial">partial</span>{{end}}{{if .SeedFailed}}<span class="badge badge-sm badge-error badge-outline seed-failed">seed failed</span>{{end}}{{if .Active}}{{template "live"}}{{end}}
-{{if .Active}}<form hx-post="/c/{{.ID}}/cancel" action="/c/{{.ID}}/cancel" method="post" class="inline"><button class="btn btn-xs">Cancel</button></form>{{end}}</div></td>
+{{if .Active}}<form hx-post="/p/{{$.Project.ID}}/c/{{.Number}}/cancel" action="/p/{{$.Project.ID}}/c/{{.Number}}/cancel" method="post" class="inline"><button class="btn btn-xs">Cancel</button></form>{{end}}</div></td>
 <td>{{.Started}}</td><td>{{.Duration}}</td><td>{{.Fetched}} / {{.Known}}</td><td class="c-failed">{{.Failures}}</td>
 {{if .Active}}<td colspan="4" class="text-base-content/60">running</td>{{else}}<td><b class="c-changed">{{.Changed}}</b>{{if .Critical}} <span class="badge badge-sm badge-error tier tier-critical"><span class="c-critical">{{.Critical}}</span> critical</span>{{else}}<span class="c-critical" hidden>0</span>{{end}}{{if .SEO}} <span class="badge badge-sm badge-warning tier tier-seo"><span class="c-seo">{{.SEO}}</span> SEO</span>{{else}}<span class="c-seo" hidden>0</span>{{end}}</td>
 <td class="c-new">{{.New}}</td><td class="c-vanished">{{.Vanished}}</td><td class="c-retired">{{.Retired}}</td>{{end}}
@@ -23,24 +23,24 @@
 {{end}}
 
 {{define "progress"}}
-<div id="progress" hx-get="/c/{{.CheckID}}/progress" hx-trigger="every 2s" hx-swap="outerHTML" class="card card-border bg-base-100"><div class="card-body gap-3 p-4">
+<div id="progress" hx-get="{{.Path}}/progress" hx-trigger="every 2s" hx-swap="outerHTML" class="card card-border bg-base-100"><div class="card-body gap-3 p-4">
 {{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
 <progress class="progress progress-info w-full" value="{{.Fetched}}" max="{{.Known}}"></progress>
 <p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed, <b class="discovered">{{.Discovered}}</b> newly discovered.</p>
 {{end}}
-{{if .Cancelling}}<p class="text-base-content/60">Cancelling…</p>{{else}}<form hx-post="/c/{{.CheckID}}/cancel" action="/c/{{.CheckID}}/cancel" method="post"><button class="btn btn-sm">Cancel</button></form>{{end}}
+{{if .Cancelling}}<p class="text-base-content/60">Cancelling…</p>{{else}}<form hx-post="{{.Path}}/cancel" action="{{.Path}}/cancel" method="post"><button class="btn btn-sm">Cancel</button></form>{{end}}
 {{with .InFlight}}<ul class="lanes space-y-0.5">{{range .}}<li class="mono font-mono text-xs text-base-content/70">fetching {{.Url}}</li>{{end}}</ul>{{end}}
 </div></div>
 {{end}}
 
 {{define "checkRunning"}}
-<h1 class="flex items-center gap-2">Check #{{.Check.ID}} {{template "live"}}</h1>
+<h1 class="flex items-center gap-2">Check #{{.Check.Number}} {{template "live"}}</h1>
 <p class="mb-3 text-base-content/60">{{.Project.Domain}} · {{.Check.Trigger}} · started {{.Started}}</p>
 {{template "progress" .Progress}}
 {{end}}
 
 {{define "report"}}
-<h1 class="flex items-center gap-2">Check #{{.Check.ID}} {{template "checkState" .Check.State}}</h1>
+<h1 class="flex items-center gap-2">Check #{{.Check.Number}} {{template "checkState" .Check.State}}</h1>
 {{if eq .Check.State "cancelled"}}<div role="alert" id="partial-banner" class="banner alert alert-warning alert-soft mb-3 py-2">This Check was cancelled, so its Report is partial: Pages not fetched are counted as skipped, and vanished and retired Pages were not counted.</div>{{end}}
 <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100 max-w-md">
 <table id="report-header" class="table table-sm">
@@ -55,7 +55,7 @@
 <tr><th>Vanished Pages</th><td class="vanished-count">{{.Check.CountVanished}}</td></tr>
 <tr><th>Retired Pages</th><td class="retired-count">{{.Check.CountRetired}}</td></tr>
 <tr><th>Failed</th><td class="failed {{if .Check.CountFailures}}text-error font-semibold{{end}}">{{.Check.CountFailures}}</td></tr>
-<tr><th>Skipped</th><td class="skipped"><a href="/c/{{.Check.ID}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
+<tr><th>Skipped</th><td class="skipped"><a href="/p/{{.Project.ID}}/c/{{.Check.Number}}?show=skipped">{{.Check.CountSkipped}}</a></td></tr>
 <tr><th>Dropped URLs</th><td class="dropped">{{.Dropped}}</td></tr>
 </table>
 </div>
@@ -134,7 +134,7 @@ htmx fragment its pager swaps in place of #<id>-section. */}}
 
 {{range .Pages}}<tr><td class="mono font-mono text-xs"><a href="/pg/{{.ID}}">{{.URL}}</a></td><td><span class="badge badge-sm badge-ghost">{{.State}}</span></td><td>{{if .LastStatus}}{{.LastStatus}}{{else}}—{{end}}</td>
 <td>{{if .LastChangedID}}<a href="/d/{{.LastChangedID}}">{{.LastChanged}}</a>{{else}}—{{end}}</td>
-<td>{{.Snapshots}}</td><td>{{if .FirstCheck}}<a href="/c/{{.FirstCheck}}">#{{.FirstCheck}}</a>{{else}}—{{end}}</td></tr>{{end}}
+<td>{{.Snapshots}}</td><td>{{if .FirstCheck}}<a href="/p/{{$.Project.ID}}/c/{{.FirstCheck}}">#{{.FirstCheck}}</a>{{else}}—{{end}}</td></tr>{{end}}
 
 </table>
 </div>
@@ -145,7 +145,7 @@ htmx fragment its pager swaps in place of #<id>-section. */}}
 
 {{define "pageHistory"}}
 <h1>Page <span id="page-url" class="mono font-mono text-base">{{.Page.Url}}</span></h1>
-<p class="text-base-content/60"><span id="page-state" class="badge badge-sm badge-ghost">{{.State}}</span> {{.Page.Origin}} Page{{if .FirstCheck}} · first seen in <a href="/c/{{.FirstCheck}}">Check #{{.FirstCheck}}</a>{{end}}</p>
+<p class="text-base-content/60"><span id="page-state" class="badge badge-sm badge-ghost">{{.State}}</span> {{.Page.Origin}} Page{{if .FirstCheck}} · first seen in <a href="/p/{{.Page.ProjectID}}/c/{{.FirstCheck}}">Check #{{.FirstCheck}}</a>{{end}}</p>
 <div class="my-2 flex items-center gap-2">
 {{if .CanIgnore}}<form id="ignore-form" hx-post="/pg/{{.Page.ID}}/ignore" hx-target="#page-msg" action="/pg/{{.Page.ID}}/ignore" method="post" class="flex items-center gap-2"><button id="ignore" class="btn btn-sm btn-error btn-outline">Ignore</button> <span id="page-msg"></span></form>{{end}}
 {{if .CanRestore}}<form id="restore-form" hx-post="/pg/{{.Page.ID}}/restore" action="/pg/{{.Page.ID}}/restore" method="post"><button id="restore" class="btn btn-sm btn-primary">Restore</button></form>{{end}}
@@ -156,7 +156,7 @@ htmx fragment its pager swaps in place of #<id>-section. */}}
 <tr><th>Check</th><th>Result</th><th>Change</th><th>Snapshot</th></tr>
 
 {{range .History}}<tr>
-<td><a href="/c/{{.CheckID}}">#{{.CheckID}}</a><div class="text-xs text-base-content/60">{{.Started}}</div></td>
+<td><a href="/p/{{$.Page.ProjectID}}/c/{{.CheckNumber}}">#{{.CheckNumber}}</a><div class="text-xs text-base-content/60">{{.Started}}</div></td>
 <td>{{.Result}}{{range .Events}} <span class="badge badge-sm badge-ghost">{{.}}</span>{{end}}
 {{if .Chain}}<div class="mono chain font-mono text-xs">{{.Chain}}</div>{{end}}</td>
 <td><div class="flex flex-wrap items-center gap-1">{{if .Tier}}{{if ne .Tier "empty"}}{{template "tierBadge" .Tier}}{{range .Badges}}<span class="badge badge-sm badge-ghost">{{.}}</span>{{end}}{{end}}{{end}}{{if .Note}}<span class="text-base-content/60">{{.Note}}</span>{{end}}</div></td>

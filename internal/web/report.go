@@ -54,7 +54,7 @@ type report struct {
 
 func (s *server) newReport(r *http.Request, c dbgen.Check, p dbgen.Project) *report {
 	u := *r.URL
-	u.Path, u.RawPath, u.Fragment = fmt.Sprintf("/c/%d", c.ID), "", ""
+	u.Path, u.RawPath, u.Fragment = checkPath(c.ProjectID, c.Number), "", ""
 	return &report{ctx: r.Context(), check: c, proj: p, url: &u}
 }
 
@@ -96,7 +96,7 @@ func (s *server) buildReport(r *http.Request, c dbgen.Check, p dbgen.Project) (m
 // reportSectionPage is the htmx fragment of one Report section: only that
 // section's queries run. A full load is sent to the Report itself.
 func (s *server) reportSectionPage(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.pathID(w, r)
+	c, ok := s.pathCheck(w, r)
 	if !ok {
 		return
 	}
@@ -110,12 +110,7 @@ func (s *server) reportSectionPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	c, err := s.q.GetCheck(r.Context(), id)
-	if err != nil {
-		s.notFoundOrFail(w, r, err)
-		return
-	}
-	full := fmt.Sprintf("/c/%d?%s#%s", c.ID, r.URL.RawQuery, sec.ID)
+	full := fmt.Sprintf("%s?%s#%s", checkPath(c.ProjectID, c.Number), r.URL.RawQuery, sec.ID)
 	if r.Header.Get("HX-Request") != "true" || check.Active(c.State) {
 		sendTo(w, r, full)
 		return

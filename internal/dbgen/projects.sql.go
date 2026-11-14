@@ -40,7 +40,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (owner_id, domain, schedule)
 VALUES ($1, $2, $3)
-RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id
+RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number
 `
 
 type CreateProjectParams struct {
@@ -64,12 +64,13 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.ExcludePatterns,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.LastCheckNumber,
 	)
 	return i, err
 }
 
 const getProjectByDomain = `-- name: GetProjectByDomain :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects WHERE owner_id = $1 AND domain = $2
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects WHERE owner_id = $1 AND domain = $2
 `
 
 type GetProjectByDomainParams struct {
@@ -92,6 +93,7 @@ func (q *Queries) GetProjectByDomain(ctx context.Context, arg GetProjectByDomain
 		&i.ExcludePatterns,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.LastCheckNumber,
 	)
 	return i, err
 }
@@ -130,7 +132,7 @@ func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Pa
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects ORDER BY domain
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects ORDER BY domain
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -154,6 +156,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.ExcludePatterns,
 			&i.CreatedAt,
 			&i.OwnerID,
+			&i.LastCheckNumber,
 		); err != nil {
 			return nil, err
 		}

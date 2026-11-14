@@ -2,7 +2,7 @@
 <h1>Snapshot #{{.Snap.ID}} <span class="mono font-mono text-base">{{.Snap.Url}}</span></h1>
 <p id="snapshot-meta" class="text-base-content/60">
 <span class="badge badge-sm badge-ghost">{{.Snap.Status}}</span>
-<a href="/c/{{.Snap.CheckID}}">Check #{{.Snap.CheckID}}</a> · {{.Fetched}} · {{.Timing}} · {{.Size}}
+<a href="/p/{{.Snap.ProjectID}}/c/{{.Snap.CheckNumber}}">Check #{{.Snap.CheckNumber}}</a> · {{.Fetched}} · {{.Timing}} · {{.Size}}
 · <a class="mono font-mono text-xs" href="{{.Snap.Url}}">{{.Snap.Url}}</a>
 </p>
 <p class="my-2">

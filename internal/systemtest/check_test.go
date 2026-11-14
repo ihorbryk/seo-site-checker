@@ -191,7 +191,7 @@ func TestPressingRunCheckWhileOneIsActiveShowsThatCheck(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM checks`); n != 1 {
 		t.Errorf("%d Checks, want 1", n)
 	}
-	progress := s.Get("/c/" + itoa(first))
+	progress := s.Get(s.CheckPath(first))
 	if progress.Code != 200 || s.Page(progress).Find("#progress[hx-trigger='every 2s']").Length() != 1 {
 		t.Errorf("active Check page is not the polling progress view (status %d)", progress.Code)
 	}
@@ -263,15 +263,15 @@ func TestProgressFragmentPollsUntilTheCheckEnds(t *testing.T) {
 	p := s.AddProject("shop.test")
 	id := s.RunCheck(p)
 
-	w := s.Get("/c/" + itoa(id) + "/progress")
+	w := s.Get(s.CheckPath(id) + "/progress")
 	d := s.Page(w)
 	if w.Code != 200 || d.Find("#progress[hx-get][hx-trigger='every 2s']").Length() != 1 {
 		t.Fatalf("progress fragment: status %d %s", w.Code, w.Body.String())
 	}
 
 	s.WaitForCheck(id)
-	w = s.Get("/c/" + itoa(id) + "/progress")
-	if w.Header().Get("HX-Redirect") != "/c/"+itoa(id) {
+	w = s.Get(s.CheckPath(id) + "/progress")
+	if w.Header().Get("HX-Redirect") != s.CheckPath(id) {
 		t.Errorf("finished Check should redirect the fragment to its Report, got %q", w.Header().Get("HX-Redirect"))
 	}
 }

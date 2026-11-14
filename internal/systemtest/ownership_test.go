@@ -18,13 +18,14 @@ func TestAnotherUsersResourcesAnswer404WhileTheOwnerUsesThemNormally(t *testing.
 	snap := testfixtures.Snapshot(t, s.Pool, c, pg)
 
 	screens := map[string]string{
-		"project":  "/p/" + itoa(p.ID),
-		"settings": "/p/" + itoa(p.ID) + "/settings",
-		"pages":    "/p/" + itoa(p.ID) + "/pages",
-		"page":     "/pg/" + itoa(pg.ID),
-		"check":    "/c/" + itoa(c.ID),
-		"snapshot": "/s/" + itoa(snap.ID),
-		"diff":     "/d/" + itoa(snap.ID),
+		"project":        "/p/" + itoa(p.ID),
+		"settings":       "/p/" + itoa(p.ID) + "/settings",
+		"pages":          "/p/" + itoa(p.ID) + "/pages",
+		"page":           "/pg/" + itoa(pg.ID),
+		"check":          s.CheckPath(c.ID),
+		"old check link": "/c/" + itoa(c.ID),
+		"snapshot":       "/s/" + itoa(snap.ID),
+		"diff":           "/d/" + itoa(snap.ID),
 	}
 	for name, path := range screens {
 		if w := other.Get(path); w.Code != http.StatusNotFound {
