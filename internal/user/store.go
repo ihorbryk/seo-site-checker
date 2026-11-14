@@ -44,6 +44,24 @@ func Create(ctx context.Context, db dbgen.DBTX, h *Hasher, email, password strin
 	return u, err
 }
 
+// Ensure returns the User with that email, creating it with the password when
+// there is none. An existing User is returned untouched, password included.
+func Ensure(ctx context.Context, db dbgen.DBTX, h *Hasher, email, password string) (u dbgen.User, created bool, err error) {
+	norm, err := NormalizeEmail(email)
+	if err != nil {
+		return dbgen.User{}, false, err
+	}
+	u, err = dbgen.New(db).GetUserByEmail(ctx, norm)
+	if err == nil {
+		return u, false, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return dbgen.User{}, false, err
+	}
+	u, err = Create(ctx, db, h, norm, password)
+	return u, err == nil, err
+}
+
 // ResetPassword replaces the User's password hash and deletes every one of
 // their sessions in one transaction, returning how many were deleted.
 // An unknown email is ErrNotFound.

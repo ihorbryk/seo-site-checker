@@ -10,9 +10,11 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/project"
+	"github.com/ihorbryk/seo-site-checker/internal/user"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -32,53 +34,68 @@ func ParseTemplates() (*template.Template, error) {
 
 type crumb struct{ Label, Href string }
 
-type server struct {
-	pool  *pgxpool.Pool
-	river *river.Client[pgx.Tx] // insert-only
-	q     *dbgen.Queries
-	tmpl  *template.Template
-	log   *slog.Logger
+// Options configures the web handler beyond its database and River client.
+type Options struct {
+	// Argon2 are the cost parameters new password hashes are made with.
+	Argon2 user.Params
+	// InsecureCookies (INSECURE_COOKIES=true) serves a plain "session" cookie
+	// without Secure and sends no HSTS, for local development over HTTP.
+	InsecureCookies bool
+	// Now is the clock for sessions; nil means time.Now.
+	Now func() time.Time
 }
 
-// New builds the web handler: routes wrapped in the middleware chain. rc is an
-// insert-only River client (check.NewInsertClient) used to start Checks.
-func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.Handler, error) {
+type server struct {
+	pool   *pgxpool.Pool
+	river  *river.Client[pgx.Tx] // insert-only
+	q      *dbgen.Queries
+	tmpl   *template.Template
+	log    *slog.Logger
+	opts   Options
+	hasher *user.Hasher
+	static http.Handler
+	// dummyHash is verified against when a sign-in names an unknown email, so
+	// timing does not tell which emails have accounts.
+	dummyHash string
+}
+
+func (s *server) now() time.Time {
+	if s.opts.Now != nil {
+		return s.opts.Now()
+	}
+	return time.Now()
+}
+
+// New builds the web handler: the route table wrapped in the middleware chain.
+// rc is an insert-only River client (check.NewInsertClient) used to start Checks.
+func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger, opts Options) (http.Handler, error) {
 	tmpl, err := ParseTemplates()
 	if err != nil {
 		return nil, err
 	}
-	s := &server{pool: pool, river: rc, q: dbgen.New(pool), tmpl: tmpl, log: log}
+	s := &server{pool: pool, river: rc, q: dbgen.New(pool), tmpl: tmpl, log: log, opts: opts, hasher: user.NewHasher(opts.Argon2)}
+	if s.dummyHash, err = s.hasher.Hash("not anyone's password"); err != nil {
+		return nil, err
+	}
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		return nil, err
 	}
+	s.static = http.StripPrefix("/static/", http.FileServerFS(static))
 	mux := http.NewServeMux()
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
-	mux.HandleFunc("GET /{$}", s.home)
-	mux.HandleFunc("POST /projects", s.addProject)
-	mux.HandleFunc("GET /p/{id}", s.projectChecks)
-	mux.HandleFunc("POST /p/{id}/checks", s.runCheck)
-	mux.HandleFunc("GET /p/{id}/settings", s.settingsPage)
-	mux.HandleFunc("POST /p/{id}/settings", s.saveSettings)
-	mux.HandleFunc("POST /p/{id}/settings/noise", s.saveNoiseRules)
-	mux.HandleFunc("GET /p/{id}/settings/header-row", s.headerRow)
-	mux.HandleFunc("GET /p/{id}/pages", s.projectPages)
-	mux.HandleFunc("POST /p/{id}/pages", s.addPage)
-	mux.HandleFunc("GET /pg/{id}", s.pageHistory)
-	mux.HandleFunc("POST /pg/{id}/ignore", s.ignorePage)
-	mux.HandleFunc("POST /pg/{id}/restore", s.restorePage)
-	mux.HandleFunc("GET /c/{id}", s.checkPage)
-	mux.HandleFunc("POST /c/{id}/cancel", s.cancelCheck)
-	mux.HandleFunc("GET /c/{id}/progress", s.progressFragment)
-	mux.HandleFunc("GET /c/{id}/sections/{section}", s.reportSectionPage)
-	mux.HandleFunc("GET /s/{id}", s.snapshotPage)
-	mux.HandleFunc("GET /d/{id}", s.diffPage)
-	return chain(mux, recoverPanics(log), logRequests(log)), nil
+	for _, rt := range s.routes() {
+		mux.Handle(rt.pattern, s.guard(rt.access, rt.handler))
+	}
+	mws := []middleware{recoverPanics(log), logRequests(log)}
+	if !opts.InsecureCookies {
+		mws = append([]middleware{hsts}, mws...)
+	}
+	return chain(mux, mws...), nil
 }
 
 func (s *server) home(w http.ResponseWriter, r *http.Request) {
-	projects, err := s.q.ListProjectSummaries(r.Context())
+	projects, err := s.q.ListProjectSummaries(r.Context(), currentUser(r).ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -87,7 +104,7 @@ func (s *server) home(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) addProject(w http.ResponseWriter, r *http.Request) {
-	if _, err := project.Add(r.Context(), s.pool, r.PostFormValue("domain")); err != nil {
+	if _, err := project.Add(r.Context(), s.pool, currentUser(r).ID, r.PostFormValue("domain")); err != nil {
 		if errors.Is(err, project.ErrInvalidDomain) || errors.Is(err, project.ErrDuplicate) {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			s.fragment(w, r, "flash", map[string]any{"Err": true, "Message": err.Error()})
@@ -119,6 +136,7 @@ func (s *server) render(w http.ResponseWriter, r *http.Request, screen, title st
 	var page bytes.Buffer
 	err := s.tmpl.ExecuteTemplate(&page, "shell", map[string]any{
 		"Title": title, "Crumbs": crumbs, "Content": template.HTML(buf.String()),
+		"UserEmail": currentUser(r).Email,
 	})
 	if err != nil {
 		s.fail(w, r, err)

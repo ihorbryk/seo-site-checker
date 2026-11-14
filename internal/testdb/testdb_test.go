@@ -13,7 +13,8 @@ func insertProject(t *testing.T, domain string) {
 	t.Helper()
 	pool := New(t)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO projects (domain) VALUES ($1)`, domain); err != nil {
+		`WITH u AS (INSERT INTO users (email, password_hash) VALUES ('a@example.test', '!') RETURNING id)
+		 INSERT INTO projects (owner_id, domain) SELECT id, $1 FROM u`, domain); err != nil {
 		t.Fatalf("insert into migrated schema: %v", err)
 	}
 	var n int

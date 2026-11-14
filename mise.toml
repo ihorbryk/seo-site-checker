@@ -14,12 +14,13 @@ postgres = "18.6"
 # Configuration is environment variables only. DATABASE_URL honours a value
 # already in the shell (CI service container, a shared Postgres for several
 # worktrees); otherwise it points at the local `postgres` daemon below.
-# Per-developer overrides (DEMO_DOMAIN, ...) go in mise.local.toml.
+# Per-developer overrides (DEMO_DOMAIN, DEMO_EMAIL, DEMO_PASSWORD, ...) go in mise.local.toml.
 [env]
 DATABASE_URL = "{{ get_env(name='DATABASE_URL', default='postgres://postgres@127.0.0.1:54329/seo_checker?sslmode=disable') }}"
 WEB_ADDR = "127.0.0.1:8089"
 LOG_LEVEL = "info"
 WORKER_CONCURRENCY = "20"
+INSECURE_COOKIES = "true" # dev serves plain http://127.0.0.1
 
 [daemons.postgres]
 preset = "postgres"
@@ -89,7 +90,7 @@ usage = 'arg "<email>"'
 run = 'go run ./cmd/user reset-password "$usage_email"'
 
 [tasks.seed]
-description = "Create the demo Project from DEMO_DOMAIN (no-op with a hint when unset)"
+description = "Create the demo User and Project from DEMO_EMAIL, DEMO_PASSWORD and DEMO_DOMAIN (no-op with a hint unless all are set)"
 run = "go run ./cmd/seed"
 
 [tasks."seed:local"]

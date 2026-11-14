@@ -301,7 +301,7 @@ func (q *Queries) ListPagePoolStates(ctx context.Context, projectID int64) ([]Li
 }
 
 const listProjectSummaries = `-- name: ListProjectSummaries :many
-SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at,
+SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id,
     (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages,
     COALESCE(lc.id, 0)::bigint AS last_check_id,
     COALESCE(lc.state, '')::text AS last_check_state,
@@ -318,6 +318,7 @@ SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.
 FROM projects p
 LEFT JOIN LATERAL (SELECT c.id, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
 LEFT JOIN LATERAL (SELECT c.id, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
+WHERE p.owner_id = $1
 ORDER BY p.domain
 `
 
@@ -332,6 +333,7 @@ type ListProjectSummariesRow struct {
 	CustomHeaders    []byte
 	ExcludePatterns  []string
 	CreatedAt        time.Time
+	OwnerID          int64
 	ActivePages      int64
 	LastCheckID      int64
 	LastCheckState   string
@@ -344,9 +346,9 @@ type ListProjectSummariesRow struct {
 }
 
 // Projects with their active Page count, newest Check (any state) and the
-// counts of the newest ended Check's Report.
-func (q *Queries) ListProjectSummaries(ctx context.Context) ([]ListProjectSummariesRow, error) {
-	rows, err := q.db.Query(ctx, listProjectSummaries)
+// counts of the newest ended Check's Report, for one owner's Projects.
+func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]ListProjectSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listProjectSummaries, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +367,7 @@ func (q *Queries) ListProjectSummaries(ctx context.Context) ([]ListProjectSummar
 			&i.CustomHeaders,
 			&i.ExcludePatterns,
 			&i.CreatedAt,
+			&i.OwnerID,
 			&i.ActivePages,
 			&i.LastCheckID,
 			&i.LastCheckState,

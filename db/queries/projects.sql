@@ -1,13 +1,13 @@
 -- name: CreateProject :one
-INSERT INTO projects (domain, schedule)
-VALUES (sqlc.arg(domain), sqlc.arg(schedule))
+INSERT INTO projects (owner_id, domain, schedule)
+VALUES (sqlc.arg(owner_id), sqlc.arg(domain), sqlc.arg(schedule))
 RETURNING *;
 
 -- name: ListProjects :many
 SELECT * FROM projects ORDER BY domain;
 
 -- name: GetProjectByDomain :one
-SELECT * FROM projects WHERE domain = $1;
+SELECT * FROM projects WHERE owner_id = sqlc.arg(owner_id) AND domain = sqlc.arg(domain);
 
 -- name: CreatePage :one
 INSERT INTO pages (project_id, url, origin)

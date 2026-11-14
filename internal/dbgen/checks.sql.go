@@ -397,7 +397,7 @@ func (q *Queries) GetClaimedFetch(ctx context.Context, jobID pgtype.Int8) (GetCl
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at FROM projects WHERE id = $1
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
@@ -414,6 +414,7 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 		&i.CustomHeaders,
 		&i.ExcludePatterns,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

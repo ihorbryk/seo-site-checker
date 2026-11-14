@@ -116,3 +116,20 @@ func TestResetPasswordRefusesUnknownAndInvalid(t *testing.T) {
 		t.Fatalf("a refused reset deleted sessions: %d left", n)
 	}
 }
+
+func TestEnsureCreatesOnceAndKeepsTheExistingPassword(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+
+	u, created, err := user.Ensure(ctx, pool, testHasher, "Demo@Example.com", goodPassword)
+	if err != nil || !created || u.Email != "demo@example.com" {
+		t.Fatalf("first call: %+v created=%v err=%v", u, created, err)
+	}
+	again, created, err := user.Ensure(ctx, pool, testHasher, "demo@example.com", "a different long password")
+	if err != nil || created || again.ID != u.ID {
+		t.Fatalf("second call: %+v created=%v err=%v", again, created, err)
+	}
+	if ok, _ := testHasher.Verify(goodPassword, again.PasswordHash); !ok {
+		t.Fatal("Ensure must leave an existing User's password unchanged")
+	}
+}

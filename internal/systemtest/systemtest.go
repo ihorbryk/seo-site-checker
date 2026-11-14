@@ -24,9 +24,9 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/fakesite"
-	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/scheduler"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
+	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
 	"github.com/ihorbryk/seo-site-checker/internal/worker"
 	"github.com/jackc/pgx/v5"
@@ -39,19 +39,33 @@ const WaitTimeout = 30 * time.Second
 
 // System is a running web + worker on a private database.
 type System struct {
-	T       testing.TB
-	Pool    *pgxpool.Pool
-	Q       *dbgen.Queries
-	Web     http.Handler
+	T    testing.TB
+	Pool *pgxpool.Pool
+	Q    *dbgen.Queries
+	Web  http.Handler
+	// User is the default signed-in User and Browser their Browser; System's
+	// Get, Post, AddProject, ... act through it. See Browser.
+	User    dbgen.User
+	Browser *Browser
 	Worker  *river.Client[pgx.Tx]
 	Network *fakesite.Network
 	insert  *river.Client[pgx.Tx] // the insert-only client web and the scheduler share
 	queries *queryLog             // the sqlc queries the web app runs
+	webOpts web.Options
+}
+
+// Option customises the web app a System starts.
+type Option func(*web.Options)
+
+// InsecureCookies starts the web app with INSECURE_COOKIES=true.
+func InsecureCookies() Option {
+	return func(o *web.Options) { o.InsecureCookies = true }
 }
 
 // New starts the system; everything stops when the test ends. The worker
-// starts with no reachable hosts: add them with Site.
-func New(t testing.TB) *System {
+// starts with no reachable hosts: add them with Site. The default User is
+// signed in (s.User, s.Browser), so s.Get, s.Post and s.AddProject act as them.
+func New(t testing.TB, opts ...Option) *System {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pool := testdb.New(t)
@@ -72,9 +86,15 @@ func New(t testing.TB) *System {
 		t.Fatal(err)
 	}
 	t.Cleanup(webPool.Close)
-	if s.Web, err = web.New(webPool, insert, log); err != nil {
+	s.webOpts = web.Options{Argon2: testfixtures.Argon2}
+	for _, o := range opts {
+		o(&s.webOpts)
+	}
+	if s.Web, err = web.New(webPool, insert, log, s.webOpts); err != nil {
 		t.Fatal(err)
 	}
+	s.Browser = s.NewUser()
+	s.User = s.Browser.User
 	s.Worker, err = worker.NewClient(pool, worker.Options{
 		Concurrency:       20,
 		Log:               log,
@@ -97,6 +117,8 @@ func New(t testing.TB) *System {
 
 // WebQueries runs f and returns the names of the sqlc queries (e.g.
 // "ListCheckDiffRows") the web app ran meanwhile, one entry per execution.
+// The session lookup every signed-in request makes is left out: it is
+// authentication, not what the screen does.
 func (s *System) WebQueries(f func()) []string {
 	s.queries.mu.Lock()
 	s.queries.names = nil
@@ -104,7 +126,13 @@ func (s *System) WebQueries(f func()) []string {
 	f()
 	s.queries.mu.Lock()
 	defer s.queries.mu.Unlock()
-	return append([]string(nil), s.queries.names...)
+	var names []string
+	for _, n := range s.queries.names {
+		if n != "GetSessionUser" && n != "TouchSession" {
+			names = append(names, n)
+		}
+	}
+	return names
 }
 
 // queryLog is a pgx tracer that records the name of each sqlc query.
@@ -135,22 +163,11 @@ func (s *System) Site(host string) *fakesite.Site {
 	return site
 }
 
-// AddProject adds a Project through the web form, as the user does, and
-// returns it.
+// AddProject adds a Project as the default User through the web form, as the
+// user does, and returns it.
 func (s *System) AddProject(domain string) dbgen.Project {
 	s.T.Helper()
-	if w := s.Post("/projects", url.Values{"domain": {domain}}); w.Code >= 400 {
-		s.T.Fatalf("add project %q: status %d: %s", domain, w.Code, w.Body.String())
-	}
-	d, err := project.NormalizeDomain(domain)
-	if err != nil {
-		s.T.Fatal(err)
-	}
-	p, err := s.Q.GetProjectByDomain(context.Background(), d)
-	if err != nil {
-		s.T.Fatal(err)
-	}
-	return p
+	return s.Browser.AddProject(domain)
 }
 
 // Exec runs SQL against the test database, for setting up state that has no UI
@@ -180,43 +197,22 @@ func (s *System) SaveNoiseRules(p dbgen.Project, form url.Values) {
 	}
 }
 
-// Get requests path from the web app.
+// Get requests path from the web app as the default User.
 func (s *System) Get(path string) *httptest.ResponseRecorder {
 	s.T.Helper()
-	return s.do("GET", path, nil)
+	return s.Browser.Get(path)
 }
 
 // GetHTMX requests path the way an htmx hx-get does (fragment, no shell).
 func (s *System) GetHTMX(path string) *httptest.ResponseRecorder {
 	s.T.Helper()
-	r := httptest.NewRequest("GET", path, nil)
-	r.Header.Set("HX-Request", "true")
-	w := httptest.NewRecorder()
-	s.Web.ServeHTTP(w, r)
-	return w
+	return s.Browser.GetHTMX(path)
 }
 
 // Post submits a form to the web app the way htmx does.
 func (s *System) Post(path string, form url.Values) *httptest.ResponseRecorder {
 	s.T.Helper()
-	return s.do("POST", path, form)
-}
-
-func (s *System) do(method, path string, form url.Values) *httptest.ResponseRecorder {
-	var body io.Reader
-	if form != nil {
-		body = strings.NewReader(form.Encode())
-	}
-	r := httptest.NewRequest(method, path, body)
-	if form != nil {
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	}
-	if method == "POST" { // forms are submitted by htmx; pages are full loads
-		r.Header.Set("HX-Request", "true")
-	}
-	w := httptest.NewRecorder()
-	s.Web.ServeHTTP(w, r)
-	return w
+	return s.Browser.Post(path, form)
 }
 
 // Page parses a response body as HTML for goquery assertions.

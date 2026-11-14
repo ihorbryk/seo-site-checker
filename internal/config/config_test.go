@@ -80,3 +80,19 @@ func TestLoadRejectsBadArgon2(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadInsecureCookies(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://x/y"}
+	c, err := config.Load(env(base))
+	if err != nil || c.InsecureCookies {
+		t.Fatalf("default must be secure cookies: %+v err=%v", c, err)
+	}
+	base["INSECURE_COOKIES"] = "true"
+	if c, err = config.Load(env(base)); err != nil || !c.InsecureCookies {
+		t.Fatalf("INSECURE_COOKIES=true: %+v err=%v", c, err)
+	}
+	base["INSECURE_COOKIES"] = "sometimes"
+	if _, err = config.Load(env(base)); err == nil {
+		t.Fatal("a non-boolean INSECURE_COOKIES must be rejected")
+	}
+}

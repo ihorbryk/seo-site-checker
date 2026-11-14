@@ -164,6 +164,7 @@ type Project struct {
 	CustomHeaders   []byte
 	ExcludePatterns []string
 	CreatedAt       time.Time
+	OwnerID         int64
 }
 
 type RiverJob struct {

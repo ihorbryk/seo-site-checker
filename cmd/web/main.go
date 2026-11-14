@@ -11,6 +11,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/app"
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/config"
+	"github.com/ihorbryk/seo-site-checker/internal/user"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,7 +22,10 @@ func main() {
 		if err != nil {
 			return err
 		}
-		handler, err := web.New(pool, rc, log)
+		handler, err := web.New(pool, rc, log, web.Options{
+			Argon2:          user.Params{MemoryKiB: cfg.Argon2MemoryKiB, Time: cfg.Argon2Time, Threads: cfg.Argon2Threads},
+			InsecureCookies: cfg.InsecureCookies,
+		})
 		if err != nil {
 			return err
 		}

@@ -26,8 +26,12 @@ and `DROP DATABASE` each.
 - **One shared Postgres.** Parallel worktrees and agents run against one
   server through `DATABASE_URL` (see the table above). Never start or stop
   daemons from a worktree.
-- **Migrations**: one per change, made with `mise run migrate:new <name>`.
-  Goose files carry a working `Down`.
+- **Migrations**: one per change, made with `mise run migrate:new <name>`
+  (renamed to the next sequential number, `000NN_name.sql`, like the others).
+  Goose files carry a working `Down`. A migration that reads an env var
+  (`BOOTSTRAP_EMAIL`) uses `-- +goose ENVSUB ON`; goose reads the variable
+  when the provider parses the files, so a test sets it with `t.Setenv`
+  *before* `goose.NewProvider` (see `db/owners_migration_test.go`).
 - **sqlc**: queries live in `db/queries/*.sql`. When `internal/dbgen` conflicts
   in a merge or rebase, resolve the `.sql` sources, then run `mise run gen`;
   regenerated output replaces the conflicted files.
@@ -55,7 +59,8 @@ Scenario tests (Checks, discovery, Reports, ...) go through the in-process
 system harness, not through internals. `systemtest.New(t)` gives a fresh
 per-test database with:
 
-- the web router (`s.Web`, driven through `httptest`),
+- the web router (`s.Web`, driven through `httptest`) with a signed-in default
+  User (`s.User`, `s.Browser`, see below),
 - a real River worker started against that database,
 - a `fakesite.Network` behind the worker's injected `*http.Client`: it dials
   the fake sites you add and fails DNS for every other host.
@@ -68,6 +73,32 @@ p := s.AddProject("shop.test")                       // through the web form
 report := s.WaitForCheck(s.RunCheck(p))              // press Run Check, poll until it ends
 // assert on the Report with goquery: report.Find("#failures tr") ...
 ```
+
+Every screen needs a signed-in User, so `systemtest.New` creates one
+(`testfixtures.User` + `testfixtures.Session`, cheap argon2 params shared with
+`web.Options.Argon2`) and `s.Get`, `s.GetHTMX`, `s.Post` and `s.AddProject`
+act as them. They delegate to `s.Browser`, a `*systemtest.Browser`: a User plus
+a one-cookie jar. A Browser applies the app's `Set-Cookie`, so signing in or
+out through the real `/login` and `/logout` forms changes who it is. Redirects
+are not followed.
+
+```go
+other := s.NewUser()                 // a second signed-in Browser (other.User)
+visitor := s.SignedOut()             // no cookie
+w := visitor.PostPlain("/login", url.Values{"email": {s.User.Email}, "password": {testfixtures.Password}})
+visitor.Get("/p/1")                  // full page load
+visitor.GetHTMX("/p/1")              // hx-get: fragment, no shell
+visitor.Post("/projects", form)      // an htmx form post (HX-Request: true)
+visitor.PostPlain("/login", form)    // a plain, no-JS form post
+visitor.Request("POST", "/projects", form, http.Header{"HX-Current-URL": {"http://x/p/3"}}) // anything else
+other.AddProject("shop.test")        // through the form; found by owner + domain
+```
+
+`systemtest.New(t, opts...)` takes options that set `web.Options` fields
+(`systemtest.InsecureCookies()`); add one per new switch. `WebQueries` leaves
+out the session lookup every signed-in request makes. Rows built straight in
+the database (`testfixtures.Project` defaults to a fresh owner; pass
+`WithOwner(s.User)` to give it to the default User).
 
 Conventions:
 

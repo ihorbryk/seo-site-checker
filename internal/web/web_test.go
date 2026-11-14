@@ -11,22 +11,51 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/ihorbryk/seo-site-checker/internal/check"
+	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
+	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 	"github.com/ihorbryk/seo-site-checker/internal/web"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func newServer(t *testing.T) http.Handler {
+// testApp is a web handler on a private database with Users to sign in as.
+type testApp struct {
+	// Anonymous is the handler itself: requests carry no session cookie.
+	Anonymous http.Handler
+	Pool      *pgxpool.Pool
+	// User is the default User newServer signs in as.
+	User dbgen.User
+}
+
+func newTestApp(t *testing.T) *testApp {
 	t.Helper()
 	pool := testdb.New(t)
 	rc, err := check.NewInsertClient(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := web.New(pool, rc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := web.New(pool, rc, slog.New(slog.NewTextHandler(io.Discard, nil)), web.Options{Argon2: testfixtures.Argon2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	return &testApp{Anonymous: h, Pool: pool, User: testfixtures.User(t, pool)}
+}
+
+// As returns the handler as a browser signed in as u (a fresh session).
+func (a *testApp) As(t *testing.T, u dbgen.User) http.Handler {
+	t.Helper()
+	cookie := &http.Cookie{Name: web.CookieName(false), Value: testfixtures.Session(t, a.Pool, u)}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.AddCookie(cookie)
+		a.Anonymous.ServeHTTP(w, r)
+	})
+}
+
+// newServer returns the handler as the default User's browser.
+func newServer(t *testing.T) http.Handler {
+	t.Helper()
+	a := newTestApp(t)
+	return a.As(t, a.User)
 }
 
 func do(t *testing.T, h http.Handler, method, path string, form url.Values, htmx bool) *httptest.ResponseRecorder {
@@ -61,7 +90,7 @@ func TestEveryTemplateParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"shell", "home", "newProject", "project", "progress", "checkRunning", "report", "settings", "headerRow"} {
+	for _, name := range []string{"shell", "authDoc", "loginForm", "home", "newProject", "project", "progress", "checkRunning", "report", "settings", "headerRow"} {
 		if tmpl.Lookup(name) == nil {
 			t.Errorf("template %q is not defined", name)
 		}

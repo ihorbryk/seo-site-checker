@@ -38,18 +38,19 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 }
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (domain, schedule)
-VALUES ($1, $2)
-RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at
+INSERT INTO projects (owner_id, domain, schedule)
+VALUES ($1, $2, $3)
+RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id
 `
 
 type CreateProjectParams struct {
+	OwnerID  int64
 	Domain   string
 	Schedule string
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject, arg.Domain, arg.Schedule)
+	row := q.db.QueryRow(ctx, createProject, arg.OwnerID, arg.Domain, arg.Schedule)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -62,16 +63,22 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.CustomHeaders,
 		&i.ExcludePatterns,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getProjectByDomain = `-- name: GetProjectByDomain :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at FROM projects WHERE domain = $1
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects WHERE owner_id = $1 AND domain = $2
 `
 
-func (q *Queries) GetProjectByDomain(ctx context.Context, domain string) (Project, error) {
-	row := q.db.QueryRow(ctx, getProjectByDomain, domain)
+type GetProjectByDomainParams struct {
+	OwnerID int64
+	Domain  string
+}
+
+func (q *Queries) GetProjectByDomain(ctx context.Context, arg GetProjectByDomainParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectByDomain, arg.OwnerID, arg.Domain)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -84,6 +91,7 @@ func (q *Queries) GetProjectByDomain(ctx context.Context, domain string) (Projec
 		&i.CustomHeaders,
 		&i.ExcludePatterns,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -122,7 +130,7 @@ func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Pa
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at FROM projects ORDER BY domain
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects ORDER BY domain
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -145,6 +153,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.CustomHeaders,
 			&i.ExcludePatterns,
 			&i.CreatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}

@@ -22,18 +22,24 @@ func (q *Queries) CountSessionsByUser(ctx context.Context, userID int64) (int64,
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (token_hash, user_id, expires_at)
-VALUES ($1, $2, $3)
+INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at, expires_at)
+VALUES ($1, $2, $3, $3, $4)
 `
 
 type CreateSessionParams struct {
 	TokenHash []byte
 	UserID    int64
+	Now       time.Time
 	ExpiresAt time.Time
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
-	_, err := q.db.Exec(ctx, createSession, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	_, err := q.db.Exec(ctx, createSession,
+		arg.TokenHash,
+		arg.UserID,
+		arg.Now,
+		arg.ExpiresAt,
+	)
 	return err
 }
 
@@ -60,6 +66,15 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteSession = `-- name: DeleteSession :exec
+DELETE FROM sessions WHERE token_hash = $1
+`
+
+func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteSession, tokenHash)
+	return err
+}
+
 const deleteSessionsByUser = `-- name: DeleteSessionsByUser :execrows
 DELETE FROM sessions WHERE user_id = $1
 `
@@ -70,6 +85,60 @@ func (q *Queries) DeleteSessionsByUser(ctx context.Context, userID int64) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getSessionUser = `-- name: GetSessionUser :one
+SELECT u.id, u.email, u.password_hash, u.created_at, s.last_seen_at
+FROM sessions s
+JOIN users u ON u.id = s.user_id
+WHERE s.token_hash = $1
+  AND s.expires_at > $2::timestamptz
+  AND s.last_seen_at > $3::timestamptz
+`
+
+type GetSessionUserParams struct {
+	TokenHash  []byte
+	Now        time.Time
+	IdleCutoff time.Time
+}
+
+type GetSessionUserRow struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
+	LastSeenAt   time.Time
+}
+
+// The User behind a session token hash, with when the session was last bumped.
+// Absent once past expires_at (30 days from creation) or last seen before idle_cutoff.
+func (q *Queries) GetSessionUser(ctx context.Context, arg GetSessionUserParams) (GetSessionUserRow, error) {
+	row := q.db.QueryRow(ctx, getSessionUser, arg.TokenHash, arg.Now, arg.IdleCutoff)
+	var i GetSessionUserRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.LastSeenAt,
+	)
+	return i, err
+}
+
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, email, password_hash, created_at FROM users WHERE email = $1
+`
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getUserByEmailForUpdate = `-- name: GetUserByEmailForUpdate :one
@@ -99,5 +168,21 @@ type SetUserPasswordHashParams struct {
 
 func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, setUserPasswordHash, arg.PasswordHash, arg.ID)
+	return err
+}
+
+const touchSession = `-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at = $1
+WHERE token_hash = $2 AND last_seen_at < $3::timestamptz
+`
+
+type TouchSessionParams struct {
+	Now         time.Time
+	TokenHash   []byte
+	StaleBefore time.Time
+}
+
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
+	_, err := q.db.Exec(ctx, touchSession, arg.Now, arg.TokenHash, arg.StaleBefore)
 	return err
 }
