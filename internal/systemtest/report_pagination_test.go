@@ -27,6 +27,7 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 	s.SaveRequestSettings(p, settingsForm("/private/**\n"))
 	checkID := count(t, s, `INSERT INTO checks (project_id, trigger, state, number, started_at, finished_at)
 		VALUES ($1, 'manual', 'finished', 1, now(), now()) RETURNING id`, p.ID)
+	s.Exec(`UPDATE projects SET last_check_number = 1 WHERE id = $1`, p.ID)
 	pages := func(prefix string, n int, state string) {
 		s.Exec(`INSERT INTO pages (project_id, url, origin, state)
 			SELECT $1, 'https://shop.test/' || $2::text || lpad(n::text, 3, '0'), 'discovered', $4

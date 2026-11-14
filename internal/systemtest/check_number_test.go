@@ -83,4 +83,7 @@ func TestOldCheckLinksRedirectToTheCheckNumber(t *testing.T) {
 			t.Errorf("removed route GET %s: status %d, want 404", path, w.Code)
 		}
 	}
+	if w := s.Post("/c/"+itoa(c.ID)+"/cancel", url.Values{}); w.Code != http.StatusNotFound {
+		t.Errorf("removed route POST /c/%d/cancel: status %d, want 404", c.ID, w.Code)
+	}
 }
