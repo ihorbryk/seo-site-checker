@@ -1,0 +1,5 @@
+.data/
+.git/
+.claude/
+bin/
+.env
