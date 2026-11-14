@@ -12,7 +12,7 @@ import (
 )
 
 // Limiter allows at most max recorded hits per key within a sliding window.
-// Callers check Blocked before the expensive work and Record afterwards.
+// Callers Reserve a hit before the expensive work.
 type Limiter struct {
 	name   string
 	max    int
@@ -21,6 +21,7 @@ type Limiter struct {
 
 	mu        sync.Mutex
 	hits      map[string][]time.Time
+	warned    map[string]bool // refused keys already reported as tripped
 	lastSweep time.Time
 }
 
@@ -29,34 +30,62 @@ func New(name string, max int, window time.Duration, now func() time.Time) *Limi
 	if now == nil {
 		now = time.Now
 	}
-	return &Limiter{name: name, max: max, window: window, now: now, hits: map[string][]time.Time{}, lastSweep: now()}
+	return &Limiter{name: name, max: max, window: window, now: now, hits: map[string][]time.Time{}, warned: map[string]bool{}, lastSweep: now()}
 }
 
 // Name identifies the limiter in logs.
 func (l *Limiter) Name() string { return l.name }
 
-// Blocked reports whether key has used up its hits, and how long until the
-// oldest counted hit leaves the window.
-func (l *Limiter) Blocked(key string) (retryAfter time.Duration, blocked bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
-	live := l.live(key, now)
-	if len(live) < l.max {
-		return 0, false
-	}
-	return live[len(live)-l.max].Add(l.window).Sub(now), true
+// Verdict is the outcome of Reserve.
+type Verdict struct {
+	// Allowed is true when the hit was counted; the caller may go ahead.
+	Allowed bool
+	// RetryAfter is how long until the oldest counted hit leaves the window
+	// (refused hits only).
+	RetryAfter time.Duration
+	// Tripped is true on the first refusal of a key since it last had room,
+	// so callers log one line per trip rather than one per refused request.
+	Tripped bool
 }
 
-// Record counts one hit for key.
-func (l *Limiter) Record(key string) {
+// Reserve counts one hit for key if it has room, checking and counting under
+// one lock so concurrent requests cannot all pass the check before any is
+// recorded. Callers that should not charge a hit (a success, or a request
+// refused by another limiter) give it back with Refund.
+func (l *Limiter) Reserve(key string) Verdict {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	// Stale keys are swept lazily, here, once per window: memory stays bounded
+	// without a background goroutine.
 	if now.Sub(l.lastSweep) >= l.window {
 		l.sweep(now)
 	}
-	l.hits[key] = append(l.live(key, now), now)
+	live := l.live(key, now)
+	if len(live) >= l.max {
+		v := Verdict{RetryAfter: live[len(live)-l.max].Add(l.window).Sub(now), Tripped: !l.warned[key]}
+		l.warned[key] = true
+		return v
+	}
+	delete(l.warned, key)
+	l.hits[key] = append(live, now)
+	return Verdict{Allowed: true}
+}
+
+// Refund gives back the most recent hit of key.
+func (l *Limiter) Refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	hs := l.hits[key]
+	if len(hs) == 0 {
+		return
+	}
+	if len(hs) == 1 {
+		delete(l.hits, key)
+	} else {
+		l.hits[key] = hs[:len(hs)-1]
+	}
+	delete(l.warned, key)
 }
 
 // Clear forgets key's hits.
@@ -64,9 +93,10 @@ func (l *Limiter) Clear(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.hits, key)
+	delete(l.warned, key)
 }
 
-// Sweep drops keys whose hits have all left the window. Record calls it once
+// Sweep drops keys whose hits have all left the window. Reserve calls it once
 // per window, so memory stays bounded without a background goroutine.
 func (l *Limiter) Sweep() {
 	l.mu.Lock()
@@ -84,6 +114,11 @@ func (l *Limiter) Len() int {
 func (l *Limiter) sweep(now time.Time) {
 	for k := range l.hits {
 		l.live(k, now) // deletes the key once nothing is left
+	}
+	for k := range l.warned {
+		if _, held := l.hits[k]; !held {
+			delete(l.warned, k)
+		}
 	}
 	l.lastSweep = now
 }

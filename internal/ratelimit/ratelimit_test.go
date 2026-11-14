@@ -1,6 +1,8 @@
 package ratelimit_test
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,49 +16,94 @@ func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func newClock() *clock { return &clock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)} }
 
-func TestBlocksOnceThresholdHitsAreRecorded(t *testing.T) {
+func TestReserveRefusesOnceMaxHitsAreHeld(t *testing.T) {
 	c := newClock()
 	l := ratelimit.New("login-ip", 3, time.Hour, c.now)
 	for i := 0; i < 3; i++ {
-		if _, blocked := l.Blocked("a"); blocked {
-			t.Fatalf("blocked after only %d hits", i)
+		if v := l.Reserve("a"); !v.Allowed {
+			t.Fatalf("refused after only %d hits", i)
 		}
-		l.Record("a")
 	}
-	retry, blocked := l.Blocked("a")
-	if !blocked || retry != time.Hour {
-		t.Fatalf("blocked=%v retry=%v, want blocked for the full hour", blocked, retry)
+	v := l.Reserve("a")
+	if v.Allowed || v.RetryAfter != time.Hour {
+		t.Fatalf("verdict %+v, want refused for the full hour", v)
 	}
-	if _, blocked := l.Blocked("b"); blocked {
-		t.Error("another key must not be blocked")
+	if !l.Reserve("b").Allowed {
+		t.Error("another key must not be refused")
+	}
+}
+
+func TestReserveIsAtomicUnderConcurrency(t *testing.T) {
+	l := ratelimit.New("x", 5, time.Hour, newClock().now)
+	var allowed atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.Reserve("a").Allowed {
+				allowed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := allowed.Load(); got != 5 {
+		t.Errorf("%d reservations allowed, want exactly 5", got)
+	}
+}
+
+func TestRefundGivesBackTheLatestHit(t *testing.T) {
+	l := ratelimit.New("x", 1, time.Hour, newClock().now)
+	l.Reserve("a")
+	l.Refund("a")
+	if !l.Reserve("a").Allowed {
+		t.Error("refunded hit still counted")
+	}
+	l.Refund("nobody") // harmless
+}
+
+func TestOnlyTheFirstRefusalOfATripIsMarkedTripped(t *testing.T) {
+	c := newClock()
+	l := ratelimit.New("x", 1, time.Hour, c.now)
+	l.Reserve("a")
+	if v := l.Reserve("a"); v.Allowed || !v.Tripped {
+		t.Fatalf("first refusal %+v, want tripped", v)
+	}
+	if v := l.Reserve("a"); v.Allowed || v.Tripped {
+		t.Fatalf("second refusal %+v, want refused but not tripped again", v)
+	}
+	c.advance(time.Hour)
+	l.Reserve("a")
+	if v := l.Reserve("a"); !v.Tripped {
+		t.Errorf("a new trip after recovery %+v, want tripped", v)
 	}
 }
 
 func TestRecoversAsTheWindowSlides(t *testing.T) {
 	c := newClock()
 	l := ratelimit.New("x", 2, time.Hour, c.now)
-	l.Record("a") // t+0
+	l.Reserve("a") // t+0
 	c.advance(30 * time.Minute)
-	l.Record("a") // t+30m
-	retry, blocked := l.Blocked("a")
-	if !blocked || retry != 30*time.Minute {
-		t.Fatalf("blocked=%v retry=%v, want 30m until the oldest hit leaves", blocked, retry)
+	l.Reserve("a") // t+30m
+	v := l.Reserve("a")
+	if v.Allowed || v.RetryAfter != 30*time.Minute {
+		t.Fatalf("verdict %+v, want refused for 30m until the oldest hit leaves", v)
 	}
 	c.advance(30 * time.Minute) // the first hit is exactly a window old
-	if _, blocked := l.Blocked("a"); blocked {
+	if !l.Reserve("a").Allowed {
 		t.Error("must recover once the oldest hit leaves the window")
 	}
 }
 
 func TestClearForgetsAKey(t *testing.T) {
 	l := ratelimit.New("x", 1, time.Hour, newClock().now)
-	l.Record("a")
-	l.Record("b")
+	l.Reserve("a")
+	l.Reserve("b")
 	l.Clear("a")
-	if _, blocked := l.Blocked("a"); blocked {
-		t.Error("cleared key still blocked")
+	if !l.Reserve("a").Allowed {
+		t.Error("cleared key still refused")
 	}
-	if _, blocked := l.Blocked("b"); !blocked {
+	if l.Reserve("b").Allowed {
 		t.Error("clearing one key must not clear another")
 	}
 }
@@ -64,25 +111,25 @@ func TestClearForgetsAKey(t *testing.T) {
 func TestSweepDropsStaleKeys(t *testing.T) {
 	c := newClock()
 	l := ratelimit.New("x", 5, time.Hour, c.now)
-	l.Record("old")
+	l.Reserve("old")
 	c.advance(2 * time.Hour)
-	l.Record("new")
+	l.Reserve("new")
 	l.Sweep()
 	if got := l.Len(); got != 1 {
 		t.Errorf("%d keys after sweep, want 1", got)
 	}
 }
 
-func TestRecordSweepsOnItsOwn(t *testing.T) {
+func TestReserveSweepsOnItsOwn(t *testing.T) {
 	c := newClock()
 	l := ratelimit.New("x", 5, time.Hour, c.now)
 	for _, k := range []string{"a", "b", "c"} {
-		l.Record(k)
+		l.Reserve(k)
 	}
 	c.advance(3 * time.Hour)
-	l.Record("d")
+	l.Reserve("d")
 	if got := l.Len(); got != 1 {
-		t.Errorf("%d keys, want stale ones swept on Record", got)
+		t.Errorf("%d keys, want stale ones swept on Reserve", got)
 	}
 }
 

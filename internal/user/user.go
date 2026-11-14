@@ -21,10 +21,14 @@ const (
 // ErrInvalidEmail is returned by NormalizeEmail for an unusable address.
 var ErrInvalidEmail = errors.New("Enter an email address like name@example.com.")
 
-// NormalizeEmail trims and lowercases s and checks it is a bare address with
-// a dotted domain of at most 254 characters.
+// CanonicalEmail trims and lowercases s without validating it: the form in
+// which emails are looked up and used as rate-limit keys.
+func CanonicalEmail(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// NormalizeEmail canonicalises s and checks it is a bare address with a
+// dotted domain of at most 254 characters.
 func NormalizeEmail(s string) (string, error) {
-	e := strings.ToLower(strings.TrimSpace(s))
+	e := CanonicalEmail(s)
 	if len(e) > MaxEmailLen {
 		return "", ErrInvalidEmail
 	}
