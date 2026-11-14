@@ -41,6 +41,8 @@ type Options struct {
 	// InsecureCookies (INSECURE_COOKIES=true) serves a plain "session" cookie
 	// without Secure and sends no HSTS, for local development over HTTP.
 	InsecureCookies bool
+	// DenyRegistration (DENY_REGISTRATION=true) leaves /register unrouted.
+	DenyRegistration bool
 	// Now is the clock for sessions; nil means time.Now.
 	Now func() time.Time
 }

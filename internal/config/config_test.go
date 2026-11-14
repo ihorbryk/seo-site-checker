@@ -81,6 +81,22 @@ func TestLoadRejectsBadArgon2(t *testing.T) {
 	}
 }
 
+func TestLoadDenyRegistration(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://x/y"}
+	c, err := config.Load(env(base))
+	if err != nil || c.DenyRegistration {
+		t.Fatalf("registration must be open by default: %+v err=%v", c, err)
+	}
+	base["DENY_REGISTRATION"] = "true"
+	if c, err = config.Load(env(base)); err != nil || !c.DenyRegistration {
+		t.Fatalf("DENY_REGISTRATION=true: %+v err=%v", c, err)
+	}
+	base["DENY_REGISTRATION"] = "maybe"
+	if _, err = config.Load(env(base)); err == nil {
+		t.Fatal("a non-boolean DENY_REGISTRATION must be rejected")
+	}
+}
+
 func TestLoadInsecureCookies(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://x/y"}
 	c, err := config.Load(env(base))

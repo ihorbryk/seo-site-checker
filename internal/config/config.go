@@ -20,6 +20,10 @@ type Config struct {
 	// plain HTTP, for local development: no Secure flag, no HSTS.
 	InsecureCookies bool
 
+	// DenyRegistration (DENY_REGISTRATION=true) closes self-registration:
+	// /register does not exist and accounts are created by the operator.
+	DenyRegistration bool
+
 	// argon2id cost parameters for password hashing.
 	Argon2MemoryKiB uint32
 	Argon2Time      uint32
@@ -54,6 +58,11 @@ func Load(getenv func(string) string) (Config, error) {
 	if v := getenv("INSECURE_COOKIES"); v != "" {
 		if c.InsecureCookies, err = strconv.ParseBool(v); err != nil {
 			return c, fmt.Errorf("INSECURE_COOKIES must be true or false, got %q", v)
+		}
+	}
+	if v := getenv("DENY_REGISTRATION"); v != "" {
+		if c.DenyRegistration, err = strconv.ParseBool(v); err != nil {
+			return c, fmt.Errorf("DENY_REGISTRATION must be true or false, got %q", v)
 		}
 	}
 	if c.Argon2MemoryKiB, err = uintVar(getenv, "ARGON2_MEMORY_KIB", c.Argon2MemoryKiB, 8, 1<<22); err != nil {

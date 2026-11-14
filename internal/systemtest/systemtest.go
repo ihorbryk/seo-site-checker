@@ -62,6 +62,11 @@ func InsecureCookies() Option {
 	return func(o *web.Options) { o.InsecureCookies = true }
 }
 
+// DenyRegistration starts the web app with DENY_REGISTRATION=true.
+func DenyRegistration() Option {
+	return func(o *web.Options) { o.DenyRegistration = true }
+}
+
 // New starts the system; everything stops when the test ends. The worker
 // starts with no reachable hosts: add them with Site. The default User is
 // signed in (s.User, s.Browser), so s.Get, s.Post and s.AddProject act as them.
