@@ -3,6 +3,7 @@ package user_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/user"
 )
@@ -97,6 +98,28 @@ func TestVerifyRejectsLockedAndMalformed(t *testing.T) {
 		}
 		if ok, _ := h.Verify("anything", hash); ok {
 			t.Errorf("%q verified", hash)
+		}
+	}
+}
+
+// A locked or malformed hash must cost as much as a real one, or login
+// timing tells a locked account from an unknown email.
+func TestVerifyOfAnUnusableHashTakesAsLongAsARealOne(t *testing.T) {
+	h := user.NewHasher(user.Params{MemoryKiB: 32 * 1024, Time: 2, Threads: 1})
+	real, _ := h.Hash("correct horse battery")
+	best := func(hash string) time.Duration {
+		d := time.Hour
+		for range 3 {
+			start := time.Now()
+			h.Verify("whatever", hash)
+			d = min(d, time.Since(start))
+		}
+		return d
+	}
+	want := best(real)
+	for _, hash := range []string{"!", "garbage"} {
+		if got := best(hash); got < want/2 {
+			t.Errorf("Verify against %q took %v, a real hash %v", hash, got, want)
 		}
 	}
 }

@@ -59,10 +59,12 @@ func (h *Hasher) Hash(pw string) (string, error) {
 
 // Verify reports whether pw matches hash, and whether the hash was made with
 // parameters other than the current ones and should be replaced. The locked
-// hash "!" and anything malformed never verify.
+// hash "!" and anything malformed never verify, but still cost one derivation
+// so timing does not tell them apart from a wrong password.
 func (h *Hasher) Verify(pw, hash string) (ok, needsRehash bool) {
 	p, salt, want, valid := parse(hash)
 	if !valid {
+		h.derive(pw, make([]byte, saltLen), h.params)
 		return false, false
 	}
 	got := h.derive(pw, salt, p)
