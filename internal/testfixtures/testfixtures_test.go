@@ -91,3 +91,28 @@ func TestProjectOwnerDefaultsToAFreshUserAndWithOwnerOverrides(t *testing.T) {
 		t.Fatalf("default owners must be fresh Users: %d %d (explicit %d)", a.OwnerID, b.OwnerID, owner.ID)
 	}
 }
+
+func TestCheckOptionsSetStateAndCreationTimeAndKeepTheCounterInStep(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	p := testfixtures.Project(t, pool)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	first := testfixtures.Check(t, pool, p, testfixtures.WithCheckState("finished"), testfixtures.WithCheckCreatedAt(at))
+	second := testfixtures.Check(t, pool, p)
+
+	got, err := dbgen.New(pool).GetCheck(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "finished" || !got.CreatedAt.Equal(at) || !got.StartedAt.Valid || !got.FinishedAt.Valid {
+		t.Fatalf("check = %+v", got)
+	}
+	if first.Number != 1 || second.Number != 2 || second.State != "queued" {
+		t.Fatalf("numbers %d, %d; second state %q", first.Number, second.Number, second.State)
+	}
+	var last int64
+	if err := pool.QueryRow(ctx, `SELECT last_check_number FROM projects WHERE id = $1`, p.ID).Scan(&last); err != nil || last != 2 {
+		t.Fatalf("last_check_number = %d (%v), want 2", last, err)
+	}
+}

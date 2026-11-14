@@ -67,17 +67,9 @@ func (e *env) setState(checkID int64, state string) {
 	}
 }
 
-func (e *env) manualCheck(projectID int64, state string, at time.Time) {
+func (e *env) manualCheck(p dbgen.Project, state string, at time.Time) {
 	e.t.Helper()
-	q := dbgen.New(e.pool)
-	c, err := q.CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: projectID, Trigger: check.TriggerManual})
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	if err := q.SetCheckCreatedAt(context.Background(), dbgen.SetCheckCreatedAtParams{ID: c.ID, CreatedAt: at}); err != nil {
-		e.t.Fatal(err)
-	}
-	e.setState(c.ID, state)
+	testfixtures.Check(e.t, e.pool, p, testfixtures.WithCheckState(state), testfixtures.WithCheckCreatedAt(at))
 }
 
 func (e *env) requireStartJob(c dbgen.Check) {
@@ -159,7 +151,7 @@ func TestManualChecksDontMoveTheClock(t *testing.T) {
 	p := testfixtures.Project(t, e.pool, testfixtures.WithSchedule("hourly"))
 	e.tick(t0)
 	e.setState(e.checks(p.ID)[0].ID, check.StateFinished)
-	e.manualCheck(p.ID, check.StateFinished, t0.Add(50*time.Minute))
+	e.manualCheck(p, check.StateFinished, t0.Add(50*time.Minute))
 
 	if n := e.tick(t0.Add(time.Hour)); n != 1 {
 		t.Fatalf("a manual Check at +50m delayed the scheduled one: started %d", n)
@@ -169,7 +161,7 @@ func TestManualChecksDontMoveTheClock(t *testing.T) {
 func TestAProjectWithOnlyManualChecksIsStillDueForItsFirstScheduledCheck(t *testing.T) {
 	e := newEnv(t)
 	p := testfixtures.Project(t, e.pool, testfixtures.WithSchedule("daily"))
-	e.manualCheck(p.ID, check.StateFinished, t0.Add(-time.Minute))
+	e.manualCheck(p, check.StateFinished, t0.Add(-time.Minute))
 
 	if n := e.tick(t0); n != 1 {
 		t.Fatalf("started %d, want 1", n)
@@ -217,7 +209,7 @@ func TestADueProjectWithAnActiveCheckWaitsThenStartsOnTheFirstTickAfter(t *testi
 	p := testfixtures.Project(t, e.pool, testfixtures.WithSchedule("hourly"))
 	e.tick(t0)
 	e.setState(e.checks(p.ID)[0].ID, check.StateFinished)
-	e.manualCheck(p.ID, check.StateRunning, t0.Add(59*time.Minute))
+	e.manualCheck(p, check.StateRunning, t0.Add(59*time.Minute))
 
 	for _, d := range []time.Duration{time.Hour, 2 * time.Hour} {
 		if n := e.tick(t0.Add(d)); n != 0 {

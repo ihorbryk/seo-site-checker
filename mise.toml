@@ -148,8 +148,8 @@ echo "daisyUI $usage_version downloaded; update the version in docs/testing.md a
 '''
 
 [tasks.lint]
-description = "Every lint step: fmt, vet, sqlc, tidy, literals, css"
-depends = ["lint:fmt", "lint:vet", "lint:sqlc", "lint:tidy", "lint:literals", "lint:css"]
+description = "Every lint step: fmt, vet, sqlc, tidy, literals, checkinserts, css"
+depends = ["lint:fmt", "lint:vet", "lint:sqlc", "lint:tidy", "lint:literals", "lint:checkinserts", "lint:css"]
 
 [tasks."lint:fmt"]
 description = "gofmt reports no unformatted files"
@@ -188,6 +188,19 @@ git diff --exit-code -- internal/web/static/app.css
 description = "Page state, origin and event kinds use internal/page constants, not string literals"
 depends = ["lint:sqlc", "lint:tidy"]
 run = "go run ./internal/tools/pageliterals"
+
+[tasks."lint:checkinserts"]
+description = "Go code outside db/ and internal/dbgen creates Checks through CreateCheck, never INSERT INTO checks"
+# A raw insert skips the Project's Check number counter (projects.last_check_number).
+# db/ migration tests insert raw rows on purpose.
+run = '''
+bad=$(grep -rnIiE --include='*.go' 'insert[[:space:]]+into[[:space:]]+checks([^a-z0-9_]|$)' . | grep -vE '^\./(db|internal/dbgen)/' || true)
+if [ -n "$bad" ]; then
+  echo "$bad"
+  echo "INSERT INTO checks outside db/ and internal/dbgen: create Checks with testfixtures.Check (it goes through CreateCheck and keeps the Check number counter in step)"
+  exit 1
+fi
+'''
 
 [tasks.test]
 description = "go test -race ./... against DATABASE_URL (CI, or a shared Postgres)"

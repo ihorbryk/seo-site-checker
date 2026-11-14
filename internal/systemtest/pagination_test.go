@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/systemtest"
+	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 )
 
 // firstCells returns the text of the first link in each data row of table.
@@ -41,9 +44,10 @@ func TestTheChecksTabShowsOnePageOfChecksAtATime(t *testing.T) {
 	s := systemtest.New(t)
 	p := s.AddProject("shop.test")
 	// 120 ended Checks created at the same instant: ties fall back to id.
-	s.Exec(`INSERT INTO checks (project_id, trigger, state, number, created_at, started_at, finished_at)
-		SELECT $1, 'manual', 'finished', n, '2026-01-01Z', '2026-01-01Z', '2026-01-01Z' FROM generate_series(1, 120) AS n`, p.ID)
-	s.Exec(`UPDATE projects SET last_check_number = 120 WHERE id = $1`, p.ID)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for range 120 {
+		testfixtures.Check(t, s.Pool, p, testfixtures.WithCheckState(check.StateFinished), testfixtures.WithCheckCreatedAt(at))
+	}
 	want := checkIDsNewestFirst(120)
 	base := "/p/" + itoa(p.ID)
 
@@ -81,9 +85,9 @@ func TestPageHistoryShowsOnePageOfChecksAtATime(t *testing.T) {
 	s := systemtest.New(t)
 	p := s.AddProject("shop.test")
 	seed := s.PageID(p, "https://shop.test/")
-	s.Exec(`INSERT INTO checks (project_id, trigger, state, number, started_at, finished_at)
-		SELECT $1, 'manual', 'cancelled', n, now(), now() FROM generate_series(1, 120) AS n`, p.ID)
-	s.Exec(`UPDATE projects SET last_check_number = 120 WHERE id = $1`, p.ID)
+	for range 120 {
+		testfixtures.Check(t, s.Pool, p, testfixtures.WithCheckState(check.StateCancelled))
+	}
 	s.Exec(`INSERT INTO fetches (check_id, page_id, state, outcome, skip_reason)
 		SELECT id, $1, 'done', 'skipped', 'cancelled' FROM checks WHERE project_id = $2`, seed, p.ID)
 	want := checkIDsNewestFirst(120)
