@@ -58,6 +58,7 @@ Environment variables only. `mise.toml` supplies the development defaults, and p
 | `ARGON2_THREADS` | `1` | argon2id parallelism |
 | `INSECURE_COOKIES` | `false` | `true` serves a plain `session` cookie without `Secure` and sends no HSTS, for local development over `http://`. `mise.toml` sets it for dev; leave it unset in production |
 | `DENY_REGISTRATION` | `false` | `true` closes self-registration: `/register` returns 404 and `/login` says accounts are created by the operator |
+| `TRUSTED_PROXY_HEADER` | unset | Header holding the client IP behind a reverse proxy (e.g. `X-Forwarded-For`); its rightmost entry keys the sign-in and registration rate limits. Unset uses the connection's address. Set it only when the proxy overwrites the header, or clients can spoof it |
 | `BOOTSTRAP_EMAIL` | unset | Read by the migration that gives Projects owners: an existing install's Projects pass to a locked User with this email (reset its password with `mise run user:reset-password`). Required only when Projects exist; a fresh install needs nothing |
 | `DEMO_DOMAIN` | unset | Used by `mise run seed` only: creates a manual-only demo Project for this domain |
 | `DEMO_EMAIL` | unset | `seed` only: the demo User who owns the demo Project (created if missing) |

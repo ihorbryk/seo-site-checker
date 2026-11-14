@@ -112,3 +112,14 @@ func TestLoadInsecureCookies(t *testing.T) {
 		t.Fatal("a non-boolean INSECURE_COOKIES must be rejected")
 	}
 }
+
+func TestLoadTrustedProxyHeader(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://x/y"}
+	if c, err := config.Load(env(base)); err != nil || c.TrustedProxyHeader != "" {
+		t.Fatalf("default must be no header: %+v err=%v", c, err)
+	}
+	base["TRUSTED_PROXY_HEADER"] = "X-Forwarded-For"
+	if c, err := config.Load(env(base)); err != nil || c.TrustedProxyHeader != "X-Forwarded-For" {
+		t.Fatalf("TRUSTED_PROXY_HEADER: %+v err=%v", c, err)
+	}
+}

@@ -9,19 +9,25 @@ import (
 
 const errEmailTaken = "An account with this email already exists. Sign in instead."
 
-func (s *server) registerScreen(w http.ResponseWriter, r *http.Request, status int, email, emailErr, passwordErr string) {
+func (s *server) registerScreen(w http.ResponseWriter, r *http.Request, status int, email, emailErr, passwordErr, errMsg string) {
 	s.authPage(w, r, status, "Create account", "Create your account", "registerForm", map[string]any{
-		"Email": email, "EmailError": emailErr, "PasswordError": passwordErr,
+		"Email": email, "EmailError": emailErr, "PasswordError": passwordErr, "Error": errMsg,
 	})
 }
 
 func (s *server) registerPage(w http.ResponseWriter, r *http.Request) {
-	s.registerScreen(w, r, http.StatusOK, "", "", "")
+	s.registerScreen(w, r, http.StatusOK, "", "", "", "")
 }
 
 // register creates a User and signs them in: validate, create, start a session.
 func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	ip := limitCheck{l: s.limits.registerIP, key: s.clientIP(r)}
+	if retry, blocked := s.tripped(ip); blocked {
+		s.registerScreen(w, r, http.StatusTooManyRequests, r.PostFormValue("email"), "", "", tooMany(w, retry))
+		return
+	}
+	s.limits.registerIP.Record(ip.key)
 	email := r.PostFormValue("email")
 	password := r.PostFormValue("password")
 
@@ -34,14 +40,14 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		passwordErr = err.Error()
 	}
 	if emailErr != "" || passwordErr != "" {
-		s.registerScreen(w, r, http.StatusUnprocessableEntity, email, emailErr, passwordErr)
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, email, emailErr, passwordErr, "")
 		return
 	}
 
 	u, err := user.Create(r.Context(), s.pool, s.hasher, norm, password)
 	switch {
 	case errors.Is(err, user.ErrEmailTaken):
-		s.registerScreen(w, r, http.StatusUnprocessableEntity, norm, errEmailTaken, "")
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, norm, errEmailTaken, "", "")
 		return
 	case err != nil:
 		s.fail(w, r, err)

@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"html/template"
 	"net/http"
 
@@ -47,12 +48,17 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	current, next := r.PostFormValue("current_password"), r.PostFormValue("new_password")
 
-	// (Rate limiting of failed current-password attempts goes here.)
+	key := fmt.Sprint(u.ID)
+	if retry, blocked := s.tripped(limitCheck{l: s.limits.passwordUser, key: key}); blocked {
+		s.passwordScreen(w, r, http.StatusTooManyRequests, tooMany(w, retry), "")
+		return
+	}
 	ok := false
 	if len(current) <= user.MaxPasswordBytes {
 		ok, _ = s.hasher.Verify(current, u.PasswordHash)
 	}
 	if !ok {
+		s.limits.passwordUser.Record(key)
 		s.passwordScreen(w, r, http.StatusUnprocessableEntity, errWrongCurrentPassword, "")
 		return
 	}

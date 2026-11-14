@@ -24,6 +24,11 @@ type Config struct {
 	// /register does not exist and accounts are created by the operator.
 	DenyRegistration bool
 
+	// TrustedProxyHeader (TRUSTED_PROXY_HEADER) names the header holding the
+	// client IP behind a reverse proxy; its rightmost entry keys rate limits.
+	// Empty means the connection's address.
+	TrustedProxyHeader string
+
 	// argon2id cost parameters for password hashing.
 	Argon2MemoryKiB uint32
 	Argon2Time      uint32
@@ -34,12 +39,13 @@ type Config struct {
 // variables take their defaults, except DATABASE_URL which is required.
 func Load(getenv func(string) string) (Config, error) {
 	c := Config{
-		DatabaseURL:       getenv("DATABASE_URL"),
-		WebAddr:           orDefault(getenv("WEB_ADDR"), "127.0.0.1:8089"),
-		WorkerConcurrency: 20,
-		Argon2MemoryKiB:   19456,
-		Argon2Time:        2,
-		Argon2Threads:     1,
+		DatabaseURL:        getenv("DATABASE_URL"),
+		WebAddr:            orDefault(getenv("WEB_ADDR"), "127.0.0.1:8089"),
+		WorkerConcurrency:  20,
+		TrustedProxyHeader: getenv("TRUSTED_PROXY_HEADER"),
+		Argon2MemoryKiB:    19456,
+		Argon2Time:         2,
+		Argon2Threads:      1,
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")

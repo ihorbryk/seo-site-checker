@@ -43,7 +43,10 @@ type Options struct {
 	InsecureCookies bool
 	// DenyRegistration (DENY_REGISTRATION=true) leaves /register unrouted.
 	DenyRegistration bool
-	// Now is the clock for sessions; nil means time.Now.
+	// TrustedProxyHeader (TRUSTED_PROXY_HEADER) names the header whose
+	// rightmost entry is the client IP for rate limits; empty uses RemoteAddr.
+	TrustedProxyHeader string
+	// Now is the clock for sessions and rate limits; nil means time.Now.
 	Now func() time.Time
 }
 
@@ -55,6 +58,7 @@ type server struct {
 	log    *slog.Logger
 	opts   Options
 	hasher *user.Hasher
+	limits limits
 	static http.Handler
 	// dummyHash is verified against when a sign-in names an unknown email, so
 	// timing does not tell which emails have accounts.
@@ -76,6 +80,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger, opts Op
 		return nil, err
 	}
 	s := &server{pool: pool, river: rc, q: dbgen.New(pool), tmpl: tmpl, log: log, opts: opts, hasher: user.NewHasher(opts.Argon2)}
+	s.limits = newLimits(s.now)
 	if s.dummyHash, err = s.hasher.Hash("not anyone's password"); err != nil {
 		return nil, err
 	}

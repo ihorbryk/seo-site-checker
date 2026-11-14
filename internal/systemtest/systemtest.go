@@ -62,6 +62,11 @@ func InsecureCookies() Option {
 	return func(o *web.Options) { o.InsecureCookies = true }
 }
 
+// TrustedProxyHeader starts the web app with TRUSTED_PROXY_HEADER=header.
+func TrustedProxyHeader(header string) Option {
+	return func(o *web.Options) { o.TrustedProxyHeader = header }
+}
+
 // DenyRegistration starts the web app with DENY_REGISTRATION=true.
 func DenyRegistration() Option {
 	return func(o *web.Options) { o.DenyRegistration = true }

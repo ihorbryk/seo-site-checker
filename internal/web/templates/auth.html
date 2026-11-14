@@ -40,6 +40,7 @@
 
 {{define "registerForm"}}
 <form method="post" action="/register" hx-post="/register" hx-target="this" hx-swap="outerHTML" class="flex flex-col gap-1">
+{{template "authError" .Error}}
 <label class="label mt-2 font-semibold text-base-content" for="f-email">Email</label>
 <input id="f-email" type="email" name="email" value="{{.Email}}" autocomplete="username" required autofocus class="input input-sm w-full{{if .EmailError}} input-error{{end}}">
 {{with .EmailError}}<p data-field="email" class="text-xs text-error">{{.}}</p>{{end}}

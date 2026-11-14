@@ -87,6 +87,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		refuse(errMissingCredentials)
 		return
 	}
+	ip := limitCheck{l: s.limits.loginIP, key: s.clientIP(r)}
+	em := limitCheck{l: s.limits.loginEmail, key: email, secret: true}
+	if retry, blocked := s.tripped(ip, em); blocked {
+		s.loginScreen(w, r, http.StatusTooManyRequests, email, next, tooMany(w, retry))
+		return
+	}
 	u, err := s.q.GetUserByEmail(r.Context(), email)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -104,9 +110,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		ok, needsRehash = s.hasher.Verify(password, hash)
 	}
 	if !found || !ok {
+		s.limits.loginIP.Record(ip.key)
+		s.limits.loginEmail.Record(em.key)
 		refuse(errWrongCredentials)
 		return
 	}
+	s.limits.loginEmail.Clear(em.key)
 	if needsRehash {
 		s.upgradeHash(r, u.ID, password)
 	}

@@ -4,9 +4,9 @@
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js"></script>
 <script>
-// Validation errors come back as 422 with a flash fragment; let htmx show them.
+// Validation errors come back as 422 (rate limits as 429) with a flash fragment; let htmx show them.
 document.addEventListener("htmx:beforeSwap", function (e) {
-  if (e.detail.xhr.status === 422) { e.detail.shouldSwap = true; e.detail.isError = false; }
+  if (e.detail.xhr.status === 422 || e.detail.xhr.status === 429) { e.detail.shouldSwap = true; e.detail.isError = false; }
 });
 </script>
 {{end}}
