@@ -81,3 +81,9 @@ func Lookup(ctx context.Context, db dbgen.DBTX, raw string, now time.Time) (u db
 func Delete(ctx context.Context, db dbgen.DBTX, raw string) error {
 	return dbgen.New(db).DeleteSession(ctx, HashToken(raw))
 }
+
+// Prune deletes sessions past IdleTimeout or MaxAge and returns how many. Lookup
+// already refuses them; this only keeps the table small.
+func Prune(ctx context.Context, db dbgen.DBTX, now time.Time) (int64, error) {
+	return dbgen.New(db).DeleteExpiredSessions(ctx, dbgen.DeleteExpiredSessionsParams{Now: now, IdleCutoff: now.Add(-IdleTimeout)})
+}
