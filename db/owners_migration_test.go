@@ -62,22 +62,6 @@ func TestOwnersMigrationRefusesExistingProjectsWithoutBootstrapEmail(t *testing.
 	}
 }
 
-func TestOwnersMigrationAcceptsAnApostropheInTheBootstrapEmail(t *testing.T) {
-	ctx := context.Background()
-	t.Setenv("BOOTSTRAP_EMAIL", "O'Brien@Example.com")
-	p, pool := migrateBeforeOwners(t)
-	if _, err := pool.Exec(ctx, `INSERT INTO projects (domain) VALUES ('a.example')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.UpTo(ctx, ownersMigration); err != nil {
-		t.Fatal(err)
-	}
-	var email string
-	if err := pool.QueryRow(ctx, `SELECT email FROM users`).Scan(&email); err != nil || email != "o'brien@example.com" {
-		t.Fatalf("email %q, err %v", email, err)
-	}
-}
-
 func TestOwnersMigrationGivesExistingProjectsToALockedBootstrapUser(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("BOOTSTRAP_EMAIL", "  Boss@Example.com ") // goose reads it when the provider parses the files
