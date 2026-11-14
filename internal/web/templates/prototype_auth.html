@@ -1,0 +1,184 @@
+{{/* PROTOTYPE, throwaway: auth screens + signed-in header variants. Branch prototype/auth-screens only; never merge. */}}
+
+{{/* ---------- Signed-in header slot, per variant ---------- */}}
+{{define "protoHeader"}}{{with .Proto}}{{if not .SignedOut}}
+{{if eq .V "A"}}
+<div class="ml-auto flex items-center gap-4 text-neutral-content/80">
+  <span>{{.UserEmail}}</span>
+  <a href="/prototype/auth/account" class="hover:underline">Change password</a>
+  <form method="post" action="/prototype/auth/logout"><button class="btn btn-xs btn-outline border-neutral-content/30 text-neutral-content">Sign out</button></form>
+</div>
+{{else if eq .V "B"}}
+<div class="dropdown dropdown-end ml-auto">
+  <div tabindex="0" role="button" class="btn btn-sm btn-ghost font-normal">
+    <span class="avatar avatar-placeholder"><span class="w-6 rounded-full bg-primary text-primary-content text-xs">Y</span></span>
+    {{.UserEmail}} ▾
+  </div>
+  <ul tabindex="0" class="dropdown-content menu z-10 mt-2 w-56 rounded-box bg-base-100 p-2 text-base-content shadow">
+    <li class="menu-title">Signed in as {{.UserEmail}}</li>
+    <li><a href="/prototype/auth/account">Change password</a></li>
+    <li><form method="post" action="/prototype/auth/logout" class="p-0"><button class="w-full px-3 py-1.5 text-left">Sign out</button></form></li>
+  </ul>
+</div>
+{{else}}
+<div class="ml-auto flex items-center gap-1 [&_.btn]:text-neutral-content">
+  <button class="btn btn-sm btn-ghost font-normal" title="Change password"
+    hx-get="/prototype/auth/account?modal=1" hx-target="#proto-modal-body"
+    hx-on::after-request="document.getElementById('proto-modal').showModal()">{{.UserEmail}}</button>
+  <form method="post" action="/prototype/auth/logout"><button class="btn btn-sm btn-ghost btn-square" title="Sign out" aria-label="Sign out">⏻</button></form>
+</div>
+<dialog id="proto-modal" class="modal"><div class="modal-box text-base-content" id="proto-modal-body"></div><form method="dialog" class="modal-backdrop"><button>close</button></form></dialog>
+{{end}}
+{{end}}{{end}}{{end}}
+
+{{/* ---------- Shared form; error style + confirm field vary by variant ---------- */}}
+{{define "protoForm"}}
+<form method="post" action="/prototype/auth/{{.Screen}}{{if .Modal}}?modal=1{{end}}" hx-post="/prototype/auth/{{.Screen}}{{if .Modal}}?modal=1{{end}}" hx-target="this" hx-swap="outerHTML" class="flex flex-col gap-1">
+{{if .Notice}}<div role="status" class="alert alert-info alert-soft py-2">{{.Notice}}</div>{{end}}
+{{if .Saved}}<div role="status" class="alert alert-success alert-soft py-2">Password changed. You're signed out on every other device.</div>{{end}}
+{{if eq .V "A"}}
+  {{with index .Errors "_"}}<div role="alert" class="alert alert-error alert-soft py-2">{{.}}</div>{{end}}
+{{else if .Errors}}
+  <div role="alert" class="alert alert-error alert-soft py-2 block">{{range .Errors}}<div>{{.}}</div>{{end}}</div>
+{{end}}
+{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+
+{{if eq .Screen "account"}}
+  <input type="text" name="email" value="{{.Proto.UserEmail}}" autocomplete="username" hidden>
+  <label class="label mt-2 font-semibold text-base-content" for="f-current">Current password</label>
+  <input id="f-current" type="password" name="current" autocomplete="current-password" required class="input input-sm w-full {{if index .Errors "current"}}input-error{{end}}">
+  {{if eq .V "A"}}{{with index .Errors "current"}}<p class="text-xs text-error">{{.}}</p>{{end}}{{end}}
+{{else}}
+  <label class="label mt-2 font-semibold text-base-content" for="f-email">Email</label>
+  <input id="f-email" type="email" name="email" value="{{.Email}}" autocomplete="username" required autofocus class="input input-sm w-full {{if index .Errors "email"}}input-error{{end}}">
+  {{if eq .V "A"}}{{with index .Errors "email"}}<p class="text-xs text-error">{{.}}</p>{{end}}{{end}}
+{{end}}
+
+<label class="label mt-2 font-semibold text-base-content" for="f-password">{{if eq .Screen "account"}}New password{{else}}Password{{end}}</label>
+<input id="f-password" type="password" name="password" required class="input input-sm w-full {{if index .Errors "password"}}input-error{{end}}"
+  {{if eq .Screen "login"}}autocomplete="current-password"{{else}}autocomplete="new-password" minlength="15"{{end}}>
+{{if ne .Screen "login"}}<p class="text-xs text-base-content/60">At least 15 characters. A few unrelated words work well.</p>{{end}}
+{{if eq .V "A"}}{{with index .Errors "password"}}<p class="text-xs text-error">{{.}}</p>{{end}}
+<label class="label mt-1 cursor-pointer text-xs"><input type="checkbox" class="checkbox checkbox-xs" onchange="this.form.querySelectorAll('input[type=password],input[data-pw]').forEach(i=>{i.dataset.pw=1;i.type=this.checked?'text':'password'})"> Show password{{if ne .Screen "login"}}s{{end}}</label>
+{{end}}
+
+{{if and (ne .Screen "login") (ne .V "A")}}
+  <label class="label mt-2 font-semibold text-base-content" for="f-confirm">Repeat {{if eq .Screen "account"}}new {{end}}password</label>
+  <input id="f-confirm" type="password" name="confirm" autocomplete="new-password" required class="input input-sm w-full {{if index .Errors "confirm"}}input-error{{end}}">
+{{end}}
+
+<button class="btn btn-sm btn-primary mt-4">{{if eq .Screen "login"}}Sign in{{else if eq .Screen "register"}}Create account{{else}}Change password{{end}}</button>
+{{if eq .Screen "account"}}<p class="mt-1 text-xs text-base-content/60">Changing your password signs you out on every other device.</p>{{end}}
+</form>
+{{end}}
+
+{{define "protoSwitchLink"}}{{if eq .Screen "login"}}{{if .RegOff}}<p class="text-xs text-base-content/60">Accounts are created by the operator of this site.</p>{{else}}<p>No account? <a href="/prototype/auth/register" class="link link-primary">Create one</a></p>{{end}}{{else}}<p>Already have an account? <a href="/prototype/auth/login" class="link link-primary">Sign in</a></p>{{end}}{{end}}
+
+{{/* ---------- Variant A: standalone centred card, no app header ---------- */}}
+{{define "protoAuthA"}}
+<div class="grid min-h-screen place-items-center bg-base-200 px-4">
+  <div class="w-full max-w-sm">
+    <div class="mb-4 text-center text-lg font-bold">SEO Site Checker</div>
+    <div class="card border border-base-300 bg-base-100">
+      <div class="card-body gap-3">
+        <h1 class="mb-0">{{if eq .Screen "login"}}Sign in{{else}}Create account{{end}}</h1>
+        {{template "protoForm" .}}
+        <div class="text-center text-sm">{{template "protoSwitchLink" .}}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{/* ---------- Variant B: inside the normal shell, tabs like a Project ---------- */}}
+{{define "protoAuthB"}}
+<h1>Welcome</h1>
+{{if not .RegOff}}
+<nav role="tablist" class="tabs tabs-border mb-3">
+  {{if eq .Screen "login"}}<b role="tab" class="tab tab-active">Sign in</b><a role="tab" class="tab" href="/prototype/auth/register">Create account</a>
+  {{else}}<a role="tab" class="tab" href="/prototype/auth/login">Sign in</a><b role="tab" class="tab tab-active">Create account</b>{{end}}
+</nav>
+{{end}}
+<fieldset class="fieldset max-w-md rounded-box border border-base-300 bg-base-100 px-4 pb-4">
+  <legend class="fieldset-legend">{{if eq .Screen "login"}}Sign in{{else}}Create account{{end}}</legend>
+  {{template "protoForm" .}}
+</fieldset>
+{{if .RegOff}}<p class="mt-2 text-xs text-base-content/60">Accounts are created by the operator of this site.</p>{{end}}
+{{end}}
+
+{{/* ---------- Variant C: split page, product pitch left, form right ---------- */}}
+{{define "protoAuthC"}}
+<div class="grid min-h-screen lg:grid-cols-2">
+  <section class="flex flex-col justify-between gap-10 bg-neutral p-10 text-neutral-content">
+    <div class="font-bold">SEO Site Checker</div>
+    <div class="max-w-md">
+      <p class="text-2xl font-semibold">Know when a deploy changes what search engines see.</p>
+      <ul class="mt-4 list-disc pl-5 text-neutral-content/80">
+        <li>Scheduled Checks of every Page in a Project</li>
+        <li>Diffs of titles, canonicals, robots and bodies</li>
+        <li>Reports ranked by what matters for SEO</li>
+      </ul>
+    </div>
+    <div class="text-xs text-neutral-content/50">Self-hosted. Your Projects are visible only to you.</div>
+  </section>
+  <section class="grid place-items-center bg-base-100 p-10">
+    <div class="w-full max-w-sm">
+      <h1>{{if eq .Screen "login"}}Sign in{{else}}Create your account{{end}}</h1>
+      {{template "protoForm" .}}
+      <div class="mt-4 text-sm">{{template "protoSwitchLink" .}}</div>
+    </div>
+  </section>
+</div>
+{{end}}
+
+{{/* ---------- Change password ---------- */}}
+{{define "protoAccountPage"}}
+<h1>Change password</h1>
+<p class="mb-3 text-base-content/60">Signed in as <b>{{.Proto.UserEmail}}</b></p>
+<div class="max-w-md rounded-box border border-base-300 bg-base-100 p-4">{{template "protoForm" .}}</div>
+{{end}}
+
+{{define "protoAccountModal"}}
+<h3 class="mt-0">Signed in as {{.Proto.UserEmail}}</h3>
+<h1>Change password</h1>
+{{template "protoForm" .}}
+<div class="modal-action"><form method="dialog"><button class="btn btn-sm">Close</button></form></div>
+{{end}}
+
+{{/* ---------- Bare document for standalone auth pages (A, C) ---------- */}}
+{{define "protoBare"}}<!doctype html><html lang="en"><head>{{template "head" .}}</head><body class="min-h-screen text-sm text-base-content">{{.Content}}{{template "protoSwitcher" .}}</body></html>{{end}}
+
+{{/* ---------- Floating prototype switcher ---------- */}}
+{{define "protoSwitcher"}}{{with .Proto}}
+<div id="proto-bar" class="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full bg-black px-4 py-2 text-xs text-white shadow-2xl ring-2 ring-fuchsia-500">
+  <span class="font-bold text-fuchsia-400">PROTOTYPE</span>
+  <button class="btn btn-xs btn-circle" data-step="-1">←</button>
+  <span class="min-w-40 text-center font-semibold">{{.V}} · {{.VName}}</span>
+  <button class="btn btn-xs btn-circle" data-step="1">→</button>
+  <span class="opacity-40">|</span>
+  <a class="underline" href="/">Projects</a>
+  <a class="underline" href="/prototype/auth/login">Sign in</a>
+  <a class="underline" href="/prototype/auth/register">Register</a>
+  <a class="underline" href="/prototype/auth/account">Change pw</a>
+  {{if .Screen}}<select class="select select-xs w-32 bg-neutral text-white" onchange="var u=new URL(location);u.search='';if(this.value)u.searchParams.set('state',this.value);location=u" aria-label="State">
+    <option value="">state: empty</option>
+    {{$s := .State}}{{range .States}}<option value="{{.}}" {{if eq . $s}}selected{{end}}>{{.}}</option>{{end}}
+  </select>{{end}}
+  <button class="btn btn-xs" hx-get="/prototype/auth/expired" hx-swap="none" title="An htmx request whose session expired">Expire session</button>
+  <span class="cursor-help underline decoration-dotted" title="Sign-in / current password: correct horse battery staple&#10;Any password 'throttle' → 429&#10;taken@example.com is already registered">stubs?</span>
+</div>
+<script>
+(function () {
+  var keys = [{{range .Variants}}"{{.Key}}",{{end}}], cur = "{{.V}}";
+  function go(step) {
+    var i = (keys.indexOf(cur) + step + keys.length) % keys.length;
+    var u = new URL(location); u.searchParams.set("variant", keys[i]); location.replace(u);
+  }
+  document.querySelectorAll("#proto-bar [data-step]").forEach(function (b) { b.onclick = function () { go(+b.dataset.step); }; });
+  document.addEventListener("keydown", function (e) {
+    var t = e.target; if (t.closest && t.closest("input,textarea,select,[contenteditable]")) return;
+    if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1);
+  });
+})();
+</script>
+{{end}}{{end}}

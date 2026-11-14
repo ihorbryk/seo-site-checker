@@ -74,6 +74,7 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) (http.H
 	mux.HandleFunc("GET /c/{id}/sections/{section}", s.reportSectionPage)
 	mux.HandleFunc("GET /s/{id}", s.snapshotPage)
 	mux.HandleFunc("GET /d/{id}", s.diffPage)
+	protoRoutes(mux, s) // PROTOTYPE
 	return chain(mux, recoverPanics(log), logRequests(log)), nil
 }
 
@@ -119,6 +120,7 @@ func (s *server) render(w http.ResponseWriter, r *http.Request, screen, title st
 	var page bytes.Buffer
 	err := s.tmpl.ExecuteTemplate(&page, "shell", map[string]any{
 		"Title": title, "Crumbs": crumbs, "Content": template.HTML(buf.String()),
+		"Proto": protoData(w, r), // PROTOTYPE
 	})
 	if err != nil {
 		s.fail(w, r, err)

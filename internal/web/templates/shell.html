@@ -6,14 +6,14 @@
 <script>
 // Validation errors come back as 422 with a flash fragment; let htmx show them.
 document.addEventListener("htmx:beforeSwap", function (e) {
-  if (e.detail.xhr.status === 422) { e.detail.shouldSwap = true; e.detail.isError = false; }
+  if (e.detail.xhr.status === 422 || e.detail.xhr.status === 429) { e.detail.shouldSwap = true; e.detail.isError = false; }
 });
 </script>
 {{end}}
 
 {{define "shell"}}<!doctype html><html lang="en"><head>{{template "head" .}}</head><body class="min-h-screen bg-base-200 text-sm text-base-content">
-<header class="navbar min-h-0 gap-5 bg-neutral px-6 py-2.5 text-neutral-content"><a href="/" class="brand font-bold">SEO Site Checker</a>{{with .Crumbs}}<nav class="crumbs flex flex-wrap gap-1.5 text-neutral-content/60">{{range $i, $c := .}}{{if $i}} <span>›</span> {{end}}{{if $c.Href}}<a href="{{$c.Href}}" class="text-neutral-content/80 hover:underline">{{$c.Label}}</a>{{else}}<span>{{$c.Label}}</span>{{end}}{{end}}</nav>{{end}}</header>
-<main class="mx-auto max-w-[1180px] px-6 pt-5 pb-20">{{.Content}}</main></body></html>
+<header class="navbar min-h-0 gap-5 bg-neutral px-6 py-2.5 text-neutral-content"><a href="/" class="brand font-bold">SEO Site Checker</a>{{with .Crumbs}}<nav class="crumbs flex flex-wrap gap-1.5 text-neutral-content/60">{{range $i, $c := .}}{{if $i}} <span>›</span> {{end}}{{if $c.Href}}<a href="{{$c.Href}}" class="text-neutral-content/80 hover:underline">{{$c.Label}}</a>{{else}}<span>{{$c.Label}}</span>{{end}}{{end}}</nav>{{end}}{{template "protoHeader" .}}</header>
+<main class="mx-auto max-w-[1180px] px-6 pt-5 pb-20">{{.Content}}</main>{{template "protoSwitcher" .}}</body></html>
 {{end}}
 
 {{/* Shared fragments. */}}
