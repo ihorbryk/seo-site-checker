@@ -2,12 +2,14 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/session"
+	"github.com/jackc/pgx/v5"
 )
 
 // Cookie names. The __Host- prefix makes browsers require Secure, Path=/ and
@@ -78,24 +80,74 @@ func withUser(ctx context.Context, u dbgen.User) context.Context {
 
 // guard applies a route's access level.
 func (s *server) guard(a access, next http.Handler) http.Handler {
-	switch a {
-	case public:
+	switch a.level {
+	case publicLevel:
 		return next
-	case signedIn:
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u, ok, err := s.signedInUser(r)
-			if err != nil {
-				s.fail(w, r, err)
-				return
-			}
-			if !ok {
-				s.sendToLogin(w, r)
-				return
-			}
-			next.ServeHTTP(w, r.WithContext(withUser(r.Context(), u)))
-		})
+	case signedInLevel:
+		return s.requireUser(next)
+	case ownedLevel:
+		return s.requireUser(s.requireOwner(a.kind, next))
 	}
 	panic("web: route with unknown access level")
+}
+
+func (s *server) requireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok, err := s.signedInUser(r)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !ok {
+			s.sendToLogin(w, r)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(withUser(r.Context(), u)))
+	})
+}
+
+// requireOwner answers 404 unless the {id} names a row of kind in a Project
+// the signed-in User owns. It only gates: handlers still load their own rows.
+func (s *server) requireOwner(kind ownerKind, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := s.pathID(w, r)
+		if !ok {
+			return
+		}
+		mine, err := s.owns(r.Context(), kind, id, currentUser(r).ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if !mine {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// owns reports whether the row of kind with id belongs to a Project owned by
+// userID. A missing row is not owned.
+func (s *server) owns(ctx context.Context, kind ownerKind, id, userID int64) (bool, error) {
+	var owner int64
+	var err error
+	switch kind {
+	case projectKind:
+		owner, err = s.q.ProjectOwner(ctx, id)
+	case pageKind:
+		owner, err = s.q.PageOwner(ctx, id)
+	case checkKind:
+		owner, err = s.q.CheckOwner(ctx, id)
+	case snapshotKind:
+		owner, err = s.q.SnapshotOwner(ctx, id)
+	default:
+		panic("web: unknown ownerKind")
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return owner == userID, err
 }
 
 // sendToLogin answers a signed-out request: a redirect to /login?next=<where

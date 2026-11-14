@@ -59,6 +59,25 @@ func TestUserAndSessionBuilders(t *testing.T) {
 	}
 }
 
+func TestCheckAndSnapshotBuilders(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	p := testfixtures.Project(t, pool)
+	pg := testfixtures.Page(t, pool, p, "/")
+
+	c := testfixtures.Check(t, pool, p)
+	if c.ProjectID != p.ID {
+		t.Fatalf("check project = %d, want %d", c.ProjectID, p.ID)
+	}
+	snap := testfixtures.Snapshot(t, pool, c, pg)
+	if snap.PageID != pg.ID || snap.CheckID != c.ID {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if _, err := dbgen.New(pool).GetSnapshotView(ctx, snap.ID); err != nil {
+		t.Fatalf("snapshot not readable: %v", err)
+	}
+}
+
 func TestProjectOwnerDefaultsToAFreshUserAndWithOwnerOverrides(t *testing.T) {
 	pool := testdb.New(t)
 	owner := testfixtures.User(t, pool)

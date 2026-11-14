@@ -14,6 +14,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/page"
 	"github.com/ihorbryk/seo-site-checker/internal/session"
 	"github.com/ihorbryk/seo-site-checker/internal/user"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var counter atomic.Int64
@@ -106,6 +107,39 @@ func Project(t testing.TB, db dbgen.DBTX, opts ...ProjectOption) dbgen.Project {
 		t.Fatalf("testfixtures: project: %v", err)
 	}
 	return p
+}
+
+// Check inserts a queued manual Check of the Project.
+func Check(t testing.TB, db dbgen.DBTX, project dbgen.Project) dbgen.Check {
+	t.Helper()
+	c, err := dbgen.New(db).CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: project.ID, Trigger: "manual"}) // pageliterals:ok Check trigger, not a Page origin
+	if err != nil {
+		t.Fatalf("testfixtures: check: %v", err)
+	}
+	return c
+}
+
+// Snapshot inserts a 200 Snapshot of the Page in the Check (with the Fetch
+// it belongs to). The Page must be active and in the Check's Project.
+func Snapshot(t testing.TB, db dbgen.DBTX, check dbgen.Check, pg dbgen.Page) dbgen.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	q := dbgen.New(db)
+	if _, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: check.ID, ProjectID: pg.ProjectID, PageIds: []int64{pg.ID}}); err != nil {
+		t.Fatalf("testfixtures: plan fetch: %v", err)
+	}
+	var fetchID int64
+	if err := db.QueryRow(ctx, `SELECT id FROM fetches WHERE check_id = $1 AND page_id = $2`, check.ID, pg.ID).Scan(&fetchID); err != nil {
+		t.Fatalf("testfixtures: fetch: %v", err)
+	}
+	if err := q.FinishFetchSnapshot(ctx, dbgen.FinishFetchSnapshotParams{ID: fetchID, DurationMs: pgtype.Int4{Int32: 1, Valid: true}}); err != nil {
+		t.Fatalf("testfixtures: finish fetch: %v", err)
+	}
+	s := dbgen.Snapshot{ID: fetchID, PageID: pg.ID, CheckID: check.ID, FetchedAt: time.Now(), Status: 200, Headers: []byte("[]"), SeoFields: []byte("{}")}
+	if err := q.InsertSnapshot(ctx, dbgen.InsertSnapshotParams{ID: s.ID, PageID: s.PageID, CheckID: s.CheckID, FetchedAt: s.FetchedAt, Status: s.Status, Headers: s.Headers, SeoFields: s.SeoFields}); err != nil {
+		t.Fatalf("testfixtures: snapshot: %v", err)
+	}
+	return s
 }
 
 // PageOption customises a Page fixture.

@@ -296,7 +296,7 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 		t.Errorf("section fragment: status %d, body %.200s", w.Code, w.Body.String())
 	}
 	slices.Sort(queries)
-	if want := []string{"CountFetchFailures", "GetCheck", "GetProject", "ListFetchFailures"}; !slices.Equal(queries, want) {
+	if want := []string{"CheckOwner", "CountFetchFailures", "GetCheck", "GetProject", "ListFetchFailures"}; !slices.Equal(queries, want) {
 		t.Errorf("section request ran %v, want only %v", queries, want)
 	}
 
@@ -323,7 +323,7 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 		ran[q] = true
 	}
 	for q := range ran {
-		if !slices.Contains([]string{"GetCheck", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
+		if !slices.Contains([]string{"CheckOwner", "GetCheck", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
 			t.Errorf("Changed section request ran %s (all: %v)", q, queries)
 		}
 	}
