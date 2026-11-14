@@ -32,8 +32,17 @@ func (s *server) authPage(w http.ResponseWriter, r *http.Request, status int, ti
 	out := form.Bytes()
 	if r.Header.Get("HX-Request") != "true" {
 		var page bytes.Buffer
+		// A form may have a "<form>Below" template: the switch link under it.
+		var below bytes.Buffer
+		if t := s.tmpl.Lookup(formTmpl + "Below"); t != nil {
+			if err := t.Execute(&below, data); err != nil {
+				s.fail(w, r, err)
+				return
+			}
+		}
 		err := s.tmpl.ExecuteTemplate(&page, "authDoc", map[string]any{
 			"Title": title, "Heading": heading, "Form": template.HTML(form.String()),
+			"Below": template.HTML(below.String()),
 		})
 		if err != nil {
 			s.fail(w, r, err)
@@ -59,6 +68,7 @@ func (s *server) loginScreen(w http.ResponseWriter, r *http.Request, status int,
 	}
 	s.authPage(w, r, status, "Sign in", "Sign in", "loginForm", map[string]any{
 		"Email": email, "Next": next, "Notice": notice, "Error": errMsg,
+		"CanRegister": !s.opts.DenyRegistration,
 	})
 }
 
