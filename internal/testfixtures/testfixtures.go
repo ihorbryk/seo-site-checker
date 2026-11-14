@@ -112,7 +112,7 @@ func Project(t testing.TB, db dbgen.DBTX, opts ...ProjectOption) dbgen.Project {
 // Check inserts a queued manual Check of the Project.
 func Check(t testing.TB, db dbgen.DBTX, project dbgen.Project) dbgen.Check {
 	t.Helper()
-	c, err := dbgen.New(db).CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: project.ID, Trigger: "manual"})
+	c, err := dbgen.New(db).CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: project.ID, Trigger: "manual"}) // pageliterals:ok Check trigger, not a Page origin
 	if err != nil {
 		t.Fatalf("testfixtures: check: %v", err)
 	}
