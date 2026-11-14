@@ -4,7 +4,10 @@
 ALTER TABLE projects ADD COLUMN owner_id bigint;
 
 -- +goose ENVSUB ON
-SELECT set_config('seo.bootstrap_email', '${BOOTSTRAP_EMAIL:-}', true);
+-- Dollar-quoted so an apostrophe in the address stays data. goose's variable
+-- substitution turns "$$" into "$", so the tags are written doubled; the
+-- padding spaces are trimmed below.
+SELECT set_config('seo.bootstrap_email', $$bootstrap$$ ${BOOTSTRAP_EMAIL:-} $$bootstrap$$, true);
 -- +goose ENVSUB OFF
 
 -- +goose StatementBegin
