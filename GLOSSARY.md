@@ -4,8 +4,16 @@ Periodically fetches the pages of monitored sites, keeps every response, and rep
 
 ## Language
 
+**User**:
+A person who signs in and owns Projects. A User sees and acts only on the Projects they own and everything belonging to them.
+_Avoid_: Account, member, customer
+
+**Operator**:
+A person with shell and database access to a deployment, who runs migrations and creates Users or resets their passwords from the command line. Not a User, and not a role a User can hold.
+_Avoid_: Admin, superuser
+
 **Project**:
-One monitored site, identified by its domain (a single exact host, e.g. `example.com`, distinct from `www.example.com`), owning its Request settings and Page pool.
+One monitored site owned by exactly one User, identified by its domain (a single exact host, e.g. `example.com`, distinct from `www.example.com`) unique among that User's Projects, owning its Request settings and Page pool. Two Users monitoring the same domain have separate Projects.
 _Avoid_: Site, website, account, home URL
 
 **Request settings**:
