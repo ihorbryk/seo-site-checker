@@ -53,7 +53,7 @@ type route struct {
 // routes is the one place routes are declared.
 func (s *server) routes() []route {
 	h := func(f http.HandlerFunc) http.Handler { return f }
-	return []route{
+	rs := []route{
 		{"GET /static/", public, s.static},
 		{"GET /login", public, h(s.loginPage)},
 		{"POST /login", public, h(s.login)},
@@ -79,4 +79,11 @@ func (s *server) routes() []route {
 		{"GET /s/{id}", owned(snapshotKind), h(s.snapshotPage)},
 		{"GET /d/{id}", owned(snapshotKind), h(s.diffPage)},
 	}
+	if !s.opts.DenyRegistration {
+		rs = append(rs,
+			route{"GET /register", public, h(s.registerPage)},
+			route{"POST /register", public, h(s.register)},
+		)
+	}
+	return rs
 }

@@ -23,8 +23,9 @@ func main() {
 			return err
 		}
 		handler, err := web.New(pool, rc, log, web.Options{
-			Argon2:          user.Params{MemoryKiB: cfg.Argon2MemoryKiB, Time: cfg.Argon2Time, Threads: cfg.Argon2Threads},
-			InsecureCookies: cfg.InsecureCookies,
+			Argon2:           user.Params{MemoryKiB: cfg.Argon2MemoryKiB, Time: cfg.Argon2Time, Threads: cfg.Argon2Threads},
+			InsecureCookies:  cfg.InsecureCookies,
+			DenyRegistration: cfg.DenyRegistration,
 		})
 		if err != nil {
 			return err
