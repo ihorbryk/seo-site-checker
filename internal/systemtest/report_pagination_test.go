@@ -13,8 +13,9 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 )
 
-// Like the other pagination tests, these Reports are built from rows inserted
-// up front with no worker running, and their order is the behaviour under
+// Like the other pagination tests, these Reports are built up front with no
+// worker running (the Check through testfixtures.Check, the rest as raw
+// rows), and their order is the behaviour under
 // test, so rows are compared in order.
 
 // largeReport is an ended Check of shop.test whose Report has 120 changed

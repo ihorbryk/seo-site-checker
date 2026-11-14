@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/session"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
@@ -98,17 +99,17 @@ func TestCheckOptionsSetStateAndCreationTimeAndKeepTheCounterInStep(t *testing.T
 	p := testfixtures.Project(t, pool)
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	first := testfixtures.Check(t, pool, p, testfixtures.WithCheckState("finished"), testfixtures.WithCheckCreatedAt(at))
+	first := testfixtures.Check(t, pool, p, testfixtures.WithCheckState(check.StateFinished), testfixtures.WithCheckCreatedAt(at))
 	second := testfixtures.Check(t, pool, p)
 
 	got, err := dbgen.New(pool).GetCheck(ctx, first.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "finished" || !got.CreatedAt.Equal(at) || !got.StartedAt.Valid || !got.FinishedAt.Valid {
+	if got.State != check.StateFinished || !got.CreatedAt.Equal(at) || !got.StartedAt.Valid || !got.FinishedAt.Valid {
 		t.Fatalf("check = %+v", got)
 	}
-	if first.Number != 1 || second.Number != 2 || second.State != "queued" {
+	if first.Number != 1 || second.Number != 2 || second.State != check.StateQueued {
 		t.Fatalf("numbers %d, %d; second state %q", first.Number, second.Number, second.State)
 	}
 	var last int64
