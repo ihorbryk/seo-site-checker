@@ -195,7 +195,14 @@ func (q *Queries) CountSkippedFetches(ctx context.Context, checkID int64) (int64
 }
 
 const createCheck = `-- name: CreateCheck :one
-INSERT INTO checks (project_id, trigger) VALUES ($1, $2) RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind
+WITH n AS (
+    UPDATE projects SET last_check_number = last_check_number + 1
+    WHERE id = $1
+    RETURNING last_check_number
+)
+INSERT INTO checks (project_id, trigger, number)
+SELECT $1, $2, n.last_check_number FROM n
+RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number
 `
 
 type CreateCheckParams struct {
@@ -203,6 +210,9 @@ type CreateCheckParams struct {
 	Trigger   string
 }
 
+// Inserts a queued Check with the Project's next Check number. Raising the
+// counter locks the Project row until the transaction ends, so concurrent
+// creations in one Project get consecutive numbers (ADR 0001).
 func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check, error) {
 	row := q.db.QueryRow(ctx, createCheck, arg.ProjectID, arg.Trigger)
 	var i Check
@@ -228,6 +238,7 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.RobotsBody,
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
+		&i.Number,
 	)
 	return i, err
 }
@@ -303,7 +314,7 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind FROM checks
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks
 WHERE project_id = $1 AND state IN ('queued', 'running', 'cancelling')
 `
 
@@ -332,12 +343,13 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.RobotsBody,
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
+		&i.Number,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -365,6 +377,46 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsBody,
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
+		&i.Number,
+	)
+	return i, err
+}
+
+const getCheckByNumber = `-- name: GetCheckByNumber :one
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE project_id = $1 AND number = $2
+`
+
+type GetCheckByNumberParams struct {
+	ProjectID int64
+	Number    int64
+}
+
+func (q *Queries) GetCheckByNumber(ctx context.Context, arg GetCheckByNumberParams) (Check, error) {
+	row := q.db.QueryRow(ctx, getCheckByNumber, arg.ProjectID, arg.Number)
+	var i Check
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Trigger,
+		&i.State,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.Settings,
+		&i.NoiseRules,
+		&i.Lanes,
+		&i.OrphanCountingSkipped,
+		&i.CountSnapshots,
+		&i.CountFailures,
+		&i.CountSkipped,
+		&i.CountNew,
+		&i.CountVanished,
+		&i.CountRetired,
+		&i.RobotsStatus,
+		&i.RobotsBody,
+		&i.RobotsFetchedAt,
+		&i.RobotsFailureKind,
+		&i.Number,
 	)
 	return i, err
 }
@@ -397,7 +449,7 @@ func (q *Queries) GetClaimedFetch(ctx context.Context, jobID pgtype.Int8) (GetCl
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id FROM projects WHERE id = $1
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
@@ -415,6 +467,7 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 		&i.ExcludePatterns,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.LastCheckNumber,
 	)
 	return i, err
 }
@@ -554,7 +607,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
@@ -599,6 +652,7 @@ type ListCheckRowsRow struct {
 	RobotsBody            []byte
 	RobotsFetchedAt       pgtype.Timestamptz
 	RobotsFailureKind     pgtype.Text
+	Number                int64
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -641,6 +695,7 @@ func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([
 			&i.RobotsBody,
 			&i.RobotsFetchedAt,
 			&i.RobotsFailureKind,
+			&i.Number,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -877,7 +932,7 @@ func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetches
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -905,6 +960,7 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsBody,
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
+		&i.Number,
 	)
 	return i, err
 }

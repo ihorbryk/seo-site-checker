@@ -24,6 +24,31 @@ func (s *server) pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
+// checkPath is the URL of the Check with the number in the Project.
+func checkPath(projectID, number int64) string {
+	return fmt.Sprintf("/p/%d/c/%d", projectID, number)
+}
+
+// pathCheck loads the Check that /p/{id}/c/{n} names; ok is false (and a 404
+// or 500 written) when the Project has no Check with that number.
+func (s *server) pathCheck(w http.ResponseWriter, r *http.Request) (dbgen.Check, bool) {
+	projectID, ok := s.pathID(w, r)
+	if !ok {
+		return dbgen.Check{}, false
+	}
+	n, err := strconv.ParseInt(r.PathValue("n"), 10, 64)
+	if err != nil || n < 1 {
+		http.NotFound(w, r)
+		return dbgen.Check{}, false
+	}
+	c, err := s.q.GetCheckByNumber(r.Context(), dbgen.GetCheckByNumberParams{ProjectID: projectID, Number: n})
+	if err != nil {
+		s.notFoundOrFail(w, r, err)
+		return dbgen.Check{}, false
+	}
+	return c, true
+}
+
 // notFoundOrFail writes a 404 for a missing row and a 500 for any other error.
 func (s *server) notFoundOrFail(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -43,7 +68,7 @@ func sendTo(w http.ResponseWriter, r *http.Request, href string) {
 }
 
 type checkRow struct {
-	ID       int64
+	Number   int64
 	Trigger  string
 	State    string
 	Active   bool
@@ -92,7 +117,7 @@ func (s *server) projectChecks(w http.ResponseWriter, r *http.Request) {
 	var checks []checkRow
 	for _, c := range rows {
 		checks = append(checks, checkRow{
-			ID: c.ID, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
+			Number: c.Number, Trigger: c.Trigger, State: c.State, Active: check.Active(c.State),
 			Started: formatTime(c.StartedAt.Time, c.StartedAt.Valid), Duration: duration(c.StartedAt, c.FinishedAt),
 			Fetched: c.Fetched, Known: c.Known, Failures: c.Failures, Partial: c.State == check.StateCancelled,
 			Changed: c.Changed, Critical: c.Critical, SEO: c.Seo,
@@ -120,28 +145,26 @@ func (s *server) runCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// With a Check already active, show its progress instead of a second one.
-	sendTo(w, r, fmt.Sprintf("/c/%d", c.ID))
+	sendTo(w, r, checkPath(id, c.Number))
 }
 
 // cancelCheck asks a queued or running Check to stop. Cancelling a Check that
 // is not active does nothing.
 func (s *server) cancelCheck(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.pathID(w, r)
+	c, ok := s.pathCheck(w, r)
 	if !ok {
 		return
 	}
-	if _, err := s.q.GetCheck(r.Context(), id); err != nil {
-		s.notFoundOrFail(w, r, err)
-		return
-	}
-	if _, err := s.q.RequestCancel(r.Context(), id); err != nil {
+	if _, err := s.q.RequestCancel(r.Context(), c.ID); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	sendTo(w, r, fmt.Sprintf("/c/%d", id))
+	sendTo(w, r, checkPath(c.ProjectID, c.Number))
 }
 
-func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
+// oldCheckLink sends a /c/{id} link from before Check numbers to the Check
+// under its Project.
+func (s *server) oldCheckLink(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathID(w, r)
 	if !ok {
 		return
@@ -151,13 +174,21 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 		s.notFoundOrFail(w, r, err)
 		return
 	}
+	http.Redirect(w, r, checkPath(c.ProjectID, c.Number), http.StatusMovedPermanently)
+}
+
+func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
+	c, ok := s.pathCheck(w, r)
+	if !ok {
+		return
+	}
 	p, err := s.q.GetProject(r.Context(), c.ProjectID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	crumbs := checkCrumbs(p, c.ID)
-	title := fmt.Sprintf("Check #%d", c.ID)
+	crumbs := checkCrumbs(p, c.Number)
+	title := fmt.Sprintf("Check #%d", c.Number)
 	if check.Active(c.State) {
 		prog, err := s.loadProgress(r, c)
 		if err != nil {
@@ -180,17 +211,12 @@ func (s *server) checkPage(w http.ResponseWriter, r *http.Request) {
 // progressFragment is the htmx fragment polled while a Check runs. Once the
 // Check has ended it sends the browser to the full page, which is the Report.
 func (s *server) progressFragment(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.pathID(w, r)
+	c, ok := s.pathCheck(w, r)
 	if !ok {
 		return
 	}
-	c, err := s.q.GetCheck(r.Context(), id)
-	if err != nil {
-		s.notFoundOrFail(w, r, err)
-		return
-	}
 	if !check.Active(c.State) {
-		w.Header().Set("HX-Redirect", fmt.Sprintf("/c/%d", c.ID))
+		w.Header().Set("HX-Redirect", checkPath(c.ProjectID, c.Number))
 		return
 	}
 	prog, err := s.loadProgress(r, c)
@@ -202,7 +228,7 @@ func (s *server) progressFragment(w http.ResponseWriter, r *http.Request) {
 }
 
 type progressView struct {
-	CheckID    int64
+	Path       string // the Check's URL
 	Queued     bool
 	Finalizing bool
 	Cancelling bool
@@ -227,7 +253,7 @@ func (s *server) loadProgress(r *http.Request, c dbgen.Check) (progressView, err
 		return progressView{}, err
 	}
 	return progressView{
-		CheckID: c.ID, Queued: c.State == check.StateQueued, Cancelling: c.State == check.StateCancelling,
+		Path: checkPath(c.ProjectID, c.Number), Queued: c.State == check.StateQueued, Cancelling: c.State == check.StateCancelling,
 		Finalizing: c.State == check.StateRunning && p.Fetched == p.Known,
 		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, Discovered: discovered, InFlight: inflight,
 	}, nil

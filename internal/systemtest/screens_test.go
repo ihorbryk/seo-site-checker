@@ -62,7 +62,7 @@ func TestEveryScreenHasTheSameBreadcrumbTrail(t *testing.T) {
 		{"/p/" + itoa(p.ID), "Projects › shop.test › Checks"},
 		{"/p/" + itoa(p.ID) + "/pages", "Projects › shop.test › Page pool"},
 		{"/p/" + itoa(p.ID) + "/settings", "Projects › shop.test › Settings"},
-		{"/c/" + itoa(second), "Projects › shop.test › Checks › Check #" + itoa(second)},
+		{s.CheckPath(second), "Projects › shop.test › Checks › Check #" + itoa(second)},
 		{"/s/" + itoa(snap), "Projects › shop.test › Checks › Check #" + itoa(second) + " › Snapshot #" + itoa(snap)},
 		{"/d/" + itoa(snap), "Projects › shop.test › Checks › Check #" + itoa(second) + " › Diff /"},
 		{"/pg/" + itoa(page), "Projects › shop.test › Page pool › https://shop.test/"},
@@ -80,7 +80,7 @@ func TestEveryScreenHasTheSameBreadcrumbTrail(t *testing.T) {
 	d := s.Page(s.Get("/s/" + itoa(snap)))
 	var hrefs []string
 	d.Find(".crumbs a").Each(func(_ int, a *goquery.Selection) { hrefs = append(hrefs, a.AttrOr("href", "")) })
-	want := []string{"/", "/p/" + itoa(p.ID), "/p/" + itoa(p.ID), "/c/" + itoa(second)}
+	want := []string{"/", "/p/" + itoa(p.ID), "/p/" + itoa(p.ID), s.CheckPath(second)}
 	if strings.Join(hrefs, " ") != strings.Join(want, " ") {
 		t.Errorf("snapshot crumb links = %v, want %v", hrefs, want)
 	}
@@ -154,7 +154,7 @@ func TestLiveProgressShowsNewlyDiscoveredPages(t *testing.T) {
 	id := s.RunCheck(p)
 	s.WaitFor(func() bool { return site.Hits("/a") > 0 })
 
-	got := text(s.Page(s.GetHTMX("/c/"+itoa(id)+"/progress")), ".discovered")
+	got := text(s.Page(s.GetHTMX(s.CheckPath(id)+"/progress")), ".discovered")
 	if got != "2" {
 		t.Errorf("newly discovered Pages in progress = %q, want 2", got)
 	}
@@ -178,7 +178,7 @@ func TestAnIgnoredOrExcludedPageIsLeftOutOfTheChangedList(t *testing.T) {
 	s.IgnorePage(s.PageID(p, "https://shop.test/a"))
 	s.SaveRequestSettings(p, settingsForm("/b\n"))
 
-	report := s.Page(s.Get("/c/" + itoa(id)))
+	report := s.Page(s.Get(s.CheckPath(id)))
 
 	if got := changedRows(report); len(got) != 1 || !strings.HasPrefix(got[0], "https://shop.test/c|") {
 		t.Errorf("changed rows = %v, want only /c", got)

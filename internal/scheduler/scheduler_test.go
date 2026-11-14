@@ -69,10 +69,15 @@ func (e *env) setState(checkID int64, state string) {
 
 func (e *env) manualCheck(projectID int64, state string, at time.Time) {
 	e.t.Helper()
-	if _, err := e.pool.Exec(context.Background(),
-		`INSERT INTO checks (project_id, trigger, state, created_at) VALUES ($1, 'manual', $2, $3)`, projectID, state, at); err != nil {
+	q := dbgen.New(e.pool)
+	c, err := q.CreateCheck(context.Background(), dbgen.CreateCheckParams{ProjectID: projectID, Trigger: check.TriggerManual})
+	if err != nil {
 		e.t.Fatal(err)
 	}
+	if err := q.SetCheckCreatedAt(context.Background(), dbgen.SetCheckCreatedAtParams{ID: c.ID, CreatedAt: at}); err != nil {
+		e.t.Fatal(err)
+	}
+	e.setState(c.ID, state)
 }
 
 func (e *env) requireStartJob(c dbgen.Check) {

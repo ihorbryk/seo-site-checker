@@ -96,24 +96,24 @@ func TestPaginateDisablesPrevOnFirstAndNextOnLast(t *testing.T) {
 }
 
 func TestSectionPagerUsesPrefixedParametersAndKeepsTheOthers(t *testing.T) {
-	u := mustURL(t, "/c/7?show=skipped&changed_page=2&vanished_page=3&vanished_per=100")
+	u := mustURL(t, "/p/1/c/7?show=skipped&changed_page=2&vanished_page=3&vanished_per=100")
 	p := paginateSection(u, "vanished", 450)
 	if p.Page != 3 || p.Per != 100 || p.Rows != "Rows 201–300 of 450" {
 		t.Fatalf("page %d per %d rows %q", p.Page, p.Per, p.Rows)
 	}
-	if want := "/c/7?changed_page=2&show=skipped&vanished_page=2&vanished_per=100#vanished"; p.PrevHref != want {
+	if want := "/p/1/c/7?changed_page=2&show=skipped&vanished_page=2&vanished_per=100#vanished"; p.PrevHref != want {
 		t.Errorf("prev = %q, want %q", p.PrevHref, want)
 	}
-	if want := "/c/7/sections/vanished?changed_page=2&show=skipped&vanished_page=2&vanished_per=100"; p.PrevHx != want {
+	if want := "/p/1/c/7/sections/vanished?changed_page=2&show=skipped&vanished_page=2&vanished_per=100"; p.PrevHx != want {
 		t.Errorf("prev hx = %q, want %q", p.PrevHx, want)
 	}
-	if want := "/c/7?changed_page=2&show=skipped&vanished_page=4&vanished_per=100#vanished"; p.NextHref != want {
+	if want := "/p/1/c/7?changed_page=2&show=skipped&vanished_page=4&vanished_per=100#vanished"; p.NextHref != want {
 		t.Errorf("next = %q, want %q", p.NextHref, want)
 	}
-	if want := "/c/7?changed_page=2&show=skipped&vanished_per=200#vanished"; p.Sizes[2].Href != want {
+	if want := "/p/1/c/7?changed_page=2&show=skipped&vanished_per=200#vanished"; p.Sizes[2].Href != want {
 		t.Errorf("size 200 = %q, want %q", p.Sizes[2].Href, want)
 	}
-	if want := "/c/7/sections/vanished?changed_page=2&show=skipped&vanished_per=200"; p.Sizes[2].Hx != want {
+	if want := "/p/1/c/7/sections/vanished?changed_page=2&show=skipped&vanished_per=200"; p.Sizes[2].Hx != want {
 		t.Errorf("size 200 hx = %q, want %q", p.Sizes[2].Hx, want)
 	}
 	if p.Target != "vanished-section" {
@@ -131,7 +131,7 @@ func TestSectionPagerParsesLenientlyAndIgnoresUnprefixedParameters(t *testing.T)
 		{"changed_page=-1&changed_per=500", 1, 500},
 		{"changed_page=99", 3, 50},
 	} {
-		p := paginateSection(mustURL(t, "/c/1?"+tc.query), "changed", 120)
+		p := paginateSection(mustURL(t, "/p/1/c/1?"+tc.query), "changed", 120)
 		if p.Page != tc.page || p.Per != tc.per {
 			t.Errorf("?%s: page %d per %d, want %d %d", tc.query, p.Page, p.Per, tc.page, tc.per)
 		}
@@ -148,7 +148,7 @@ func TestOnlySectionsLongerThanTheSmallestPageShowAPager(t *testing.T) {
 		{"", 51, true},
 		{"failures_per=500", 51, true},
 	} {
-		if got := paginateSection(mustURL(t, "/c/1?"+tc.query), "failures", tc.total).Shown(); got != tc.shown {
+		if got := paginateSection(mustURL(t, "/p/1/c/1?"+tc.query), "failures", tc.total).Shown(); got != tc.shown {
 			t.Errorf("?%s total %d: shown %v, want %v", tc.query, tc.total, got, tc.shown)
 		}
 	}

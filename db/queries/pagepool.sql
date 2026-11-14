@@ -7,13 +7,14 @@ WHERE project_id = $1 ORDER BY url;
 -- name: ListPagePoolRows :many
 -- The Page pool tab's columns for the given Pages, by URL. last_status is 0 for a Page with no
 -- Snapshot yet; last_changed_snapshot_id is 0 when no Snapshot of the Page has
--- a non-empty Diff; first_check_id is 0 for a Page never fetched yet.
+-- a non-empty Diff; first_check_number is 0 for a Page never fetched yet.
 SELECT pg.id, pg.url, pg.state, pg.origin, pg.orphan_streak,
     COALESCE(last.status, 0)::int AS last_status,
     COALESCE(changed.snapshot_id, 0)::bigint AS last_changed_snapshot_id,
     COALESCE(changed.fetched_at, 'epoch'::timestamptz)::timestamptz AS last_changed_at,
     (SELECT count(*) FROM snapshots s WHERE s.page_id = pg.id)::bigint AS snapshots,
-    COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
+    COALESCE((SELECT c.number FROM fetches f JOIN checks c ON c.id = f.check_id
+              WHERE f.page_id = pg.id ORDER BY f.check_id LIMIT 1), 0)::bigint AS first_check_number
 FROM pages pg
 LEFT JOIN LATERAL (
     SELECT s.status FROM snapshots s WHERE s.page_id = pg.id
@@ -41,7 +42,8 @@ RETURNING *;
 
 -- name: GetPage :one
 SELECT pg.*, pr.domain, pr.exclude_patterns,
-    COALESCE((SELECT min(f.check_id) FROM fetches f WHERE f.page_id = pg.id), 0)::bigint AS first_check_id
+    COALESCE((SELECT c.number FROM fetches f JOIN checks c ON c.id = f.check_id
+              WHERE f.page_id = pg.id ORDER BY f.check_id LIMIT 1), 0)::bigint AS first_check_number
 FROM pages pg JOIN projects pr ON pr.id = pg.project_id
 WHERE pg.id = $1;
 
@@ -58,7 +60,7 @@ SELECT count(*)::bigint FROM fetches WHERE page_id = $1 AND state = 'done';
 -- name: ListPageHistory :many
 -- One page of the Page's history: one row per Check that has a Fetch of the
 -- Page, newest first.
-SELECT f.check_id, c.started_at AS check_started_at,
+SELECT f.check_id, c.number AS check_number, c.started_at AS check_started_at,
     f.outcome, f.skip_reason, f.failure_kind, f.message, f.duration_ms,
     s.id AS snapshot_id, s.status, b.size AS body_size,
     d.tier, d.status_changed, d.headers_changed, d.seo_changed, d.body_changed,
@@ -78,9 +80,9 @@ LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 -- counts of the newest ended Check's Report, for one owner's Projects.
 SELECT p.*,
     (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages,
-    COALESCE(lc.id, 0)::bigint AS last_check_id,
+    COALESCE(lc.number, 0)::bigint AS last_check_number,
     COALESCE(lc.state, '')::text AS last_check_state,
-    COALESCE(rc.id, 0)::bigint AS report_check_id,
+    COALESCE(rc.number, 0)::bigint AS report_check_number,
     COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
               WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier <> 'empty'), 0)::bigint AS report_changed,
     COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
@@ -91,7 +93,7 @@ SELECT p.*,
     EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
             WHERE f.check_id = rc.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS report_seed_failed
 FROM projects p
-LEFT JOIN LATERAL (SELECT c.id, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
-LEFT JOIN LATERAL (SELECT c.id, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
+LEFT JOIN LATERAL (SELECT c.id, c.number, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
+LEFT JOIN LATERAL (SELECT c.id, c.number, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
 WHERE p.owner_id = sqlc.arg(owner_id)
 ORDER BY p.domain;

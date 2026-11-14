@@ -52,6 +52,9 @@ _Avoid_: Deleted page, excluded page (exclusion comes from exclude patterns, not
 One pass over a Project's Page pool, started by its schedule or manually. A Project has at most one active Check at a time. A Check ends finished, or cancelled by the user, which leaves it partial.
 _Avoid_: Run, crawl, scan, job
 
+**Check number**:
+A Check's position among its Project's Checks, counting from 1 in the order they were created, shown as "Check #n". Every Check takes one, including cancelled ones, and a number is never reused.
+
 **Fetch**:
 One attempt by a Check to retrieve one Page. It ends in a Snapshot, a Fetch failure, or a skip. A skip sends no request: robots.txt disallows the Page (or could not be read), or the Check was cancelled first. A Page has at most one Fetch per Check.
 _Avoid_: Job, task, request

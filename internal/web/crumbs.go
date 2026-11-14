@@ -17,10 +17,10 @@ func projectCrumbs(p dbgen.Project, tail ...crumb) []crumb {
 // checkCrumbs is the trail of a screen under a Check:
 // Projects › domain › Checks › Check #n › tail. With an empty tail the Check
 // itself is the current screen.
-func checkCrumbs(p dbgen.Project, checkID int64, tail ...crumb) []crumb {
-	check := crumb{Label: fmt.Sprintf("Check #%d", checkID)}
+func checkCrumbs(p dbgen.Project, checkNumber int64, tail ...crumb) []crumb {
+	check := crumb{Label: fmt.Sprintf("Check #%d", checkNumber)}
 	if len(tail) > 0 {
-		check.Href = fmt.Sprintf("/c/%d", checkID)
+		check.Href = checkPath(p.ID, checkNumber)
 	}
 	return projectCrumbs(p, append([]crumb{{Label: "Checks", Href: fmt.Sprintf("/p/%d", p.ID)}, check}, tail...)...)
 }

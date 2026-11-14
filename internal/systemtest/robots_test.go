@@ -28,7 +28,7 @@ func robotsTxt(body string) fakesite.Response {
 // skippedList returns "url|reason" for each row of the filtered skipped list.
 func skippedList(t *testing.T, s *systemtest.System, checkID int64) []string {
 	t.Helper()
-	w := s.Get("/c/" + itoa(checkID) + "?show=skipped")
+	w := s.Get(s.CheckPath(checkID) + "?show=skipped")
 	if w.Code != 200 {
 		t.Fatalf("skipped list: status %d", w.Code)
 	}
@@ -70,7 +70,7 @@ func TestADisallowedPageIsSkippedWithoutARequestAndKeepsItsLinksOut(t *testing.T
 	if text(report, ".fetched") != "2" || text(report, ".skipped") != "1" {
 		t.Errorf("fetched %q skipped %q, want 2 and 1", text(report, ".fetched"), text(report, ".skipped"))
 	}
-	if href := report.Find(".skipped a").AttrOr("href", ""); href != "/c/"+itoa(checkID)+"?show=skipped" {
+	if href := report.Find(".skipped a").AttrOr("href", ""); href != s.CheckPath(checkID)+"?show=skipped" {
 		t.Errorf("skipped count links to %q", href)
 	}
 	if got := skippedList(t, s, checkID); !sameSet(got, []string{"https://shop.test/private/x|robots_disallowed"}) {

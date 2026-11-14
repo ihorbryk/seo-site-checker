@@ -108,7 +108,7 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 	for _, pg := range pages {
 		row := poolRow{
 			ID: pg.ID, URL: pg.Url, State: labels[pg.ID], LastStatus: pg.LastStatus,
-			Snapshots: pg.Snapshots, FirstCheck: pg.FirstCheckID, LastChangedID: pg.LastChangedSnapshotID,
+			Snapshots: pg.Snapshots, FirstCheck: pg.FirstCheckNumber, LastChangedID: pg.LastChangedSnapshotID,
 		}
 		if pg.LastChangedSnapshotID != 0 {
 			row.LastChanged = formatTime(pg.LastChangedAt, true)
@@ -210,16 +210,16 @@ func (s *server) setPageState(w http.ResponseWriter, r *http.Request, ignore boo
 }
 
 type historyRow struct {
-	CheckID    int64
-	Started    string
-	Result     string
-	Tier       string
-	Badges     []string
-	Note       string // "empty", "first Snapshot" or ""
-	SnapshotID int64
-	DiffLink   bool
-	Events     []string
-	Chain      string // redirect chain, empty when the Snapshot is not a redirect
+	CheckNumber int64
+	Started     string
+	Result      string
+	Tier        string
+	Badges      []string
+	Note        string // "empty", "first Snapshot" or ""
+	SnapshotID  int64
+	DiffLink    bool
+	Events      []string
+	Chain       string // redirect chain, empty when the Snapshot is not a redirect
 }
 
 func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
@@ -249,7 +249,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 	rows := make([]historyRow, 0, len(hist))
 	for _, h := range hist {
 		row := historyRow{
-			CheckID: h.CheckID, Started: formatTime(h.CheckStartedAt.Time, h.CheckStartedAt.Valid),
+			CheckNumber: h.CheckNumber, Started: formatTime(h.CheckStartedAt.Time, h.CheckStartedAt.Valid),
 			Events: h.Events, SnapshotID: h.SnapshotID.Int64,
 		}
 		switch h.Outcome.String {
@@ -297,8 +297,8 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	_, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: pg.ExcludePatterns})
 	first := ""
-	if pg.FirstCheckID != 0 {
-		first = fmt.Sprintf("%d", pg.FirstCheckID)
+	if pg.FirstCheckNumber != 0 {
+		first = fmt.Sprintf("%d", pg.FirstCheckNumber)
 	}
 	crumbs := projectCrumbs(dbgen.Project{ID: pg.ProjectID, Domain: pg.Domain},
 		crumb{Label: "Page pool", Href: fmt.Sprintf("/p/%d/pages", pg.ProjectID)}, crumb{Label: pg.Url})

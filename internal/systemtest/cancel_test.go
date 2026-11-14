@@ -30,7 +30,7 @@ func TestCancellingMidCheckKeepsInFlightSnapshotsSkipsTheRestAndWritesNoOrphanEv
 	id := s.RunCheck(p)
 	s.WaitFor(func() bool { return site.Hits("/a") > hitsBefore })
 	s.Cancel(id)
-	if got := s.Page(s.Get("/c/" + itoa(id))).Find("#progress").Text(); !strings.Contains(got, "Cancelling") {
+	if got := s.Page(s.Get(s.CheckPath(id))).Find("#progress").Text(); !strings.Contains(got, "Cancelling") {
 		t.Errorf("progress while cancelling: %q", got)
 	}
 	report := s.WaitForCheck(id)

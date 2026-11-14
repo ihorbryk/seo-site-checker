@@ -20,7 +20,7 @@ func firstCells(d *goquery.Document, table string) []string {
 	return got
 }
 
-// checkIDsNewestFirst is "#n" … "#1": n Checks inserted in id order.
+// checkIDsNewestFirst is "#n" … "#1": n Checks numbered in id order.
 func checkIDsNewestFirst(n int) []string {
 	var ids []string
 	for i := n; i >= 1; i-- {
@@ -41,8 +41,9 @@ func TestTheChecksTabShowsOnePageOfChecksAtATime(t *testing.T) {
 	s := systemtest.New(t)
 	p := s.AddProject("shop.test")
 	// 120 ended Checks created at the same instant: ties fall back to id.
-	s.Exec(`INSERT INTO checks (project_id, trigger, state, created_at, started_at, finished_at)
-		SELECT $1, 'manual', 'finished', '2026-01-01Z', '2026-01-01Z', '2026-01-01Z' FROM generate_series(1, 120)`, p.ID)
+	s.Exec(`INSERT INTO checks (project_id, trigger, state, number, created_at, started_at, finished_at)
+		SELECT $1, 'manual', 'finished', n, '2026-01-01Z', '2026-01-01Z', '2026-01-01Z' FROM generate_series(1, 120) AS n`, p.ID)
+	s.Exec(`UPDATE projects SET last_check_number = 120 WHERE id = $1`, p.ID)
 	want := checkIDsNewestFirst(120)
 	base := "/p/" + itoa(p.ID)
 
@@ -80,8 +81,9 @@ func TestPageHistoryShowsOnePageOfChecksAtATime(t *testing.T) {
 	s := systemtest.New(t)
 	p := s.AddProject("shop.test")
 	seed := s.PageID(p, "https://shop.test/")
-	s.Exec(`INSERT INTO checks (project_id, trigger, state, started_at, finished_at)
-		SELECT $1, 'manual', 'cancelled', now(), now() FROM generate_series(1, 120)`, p.ID)
+	s.Exec(`INSERT INTO checks (project_id, trigger, state, number, started_at, finished_at)
+		SELECT $1, 'manual', 'cancelled', n, now(), now() FROM generate_series(1, 120) AS n`, p.ID)
+	s.Exec(`UPDATE projects SET last_check_number = 120 WHERE id = $1`, p.ID)
 	s.Exec(`INSERT INTO fetches (check_id, page_id, state, outcome, skip_reason)
 		SELECT id, $1, 'done', 'skipped', 'cancelled' FROM checks WHERE project_id = $2`, seed, p.ID)
 	want := checkIDsNewestFirst(120)

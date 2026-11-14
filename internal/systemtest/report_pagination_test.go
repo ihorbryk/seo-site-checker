@@ -25,8 +25,9 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 	t.Helper()
 	p := s.AddProject("shop.test")
 	s.SaveRequestSettings(p, settingsForm("/private/**\n"))
-	checkID := count(t, s, `INSERT INTO checks (project_id, trigger, state, started_at, finished_at)
-		VALUES ($1, 'manual', 'finished', now(), now()) RETURNING id`, p.ID)
+	checkID := count(t, s, `INSERT INTO checks (project_id, trigger, state, number, started_at, finished_at)
+		VALUES ($1, 'manual', 'finished', 1, now(), now()) RETURNING id`, p.ID)
+	s.Exec(`UPDATE projects SET last_check_number = 1 WHERE id = $1`, p.ID)
 	pages := func(prefix string, n int, state string) {
 		s.Exec(`INSERT INTO pages (project_id, url, origin, state)
 			SELECT $1, 'https://shop.test/' || $2::text || lpad(n::text, 3, '0'), 'discovered', $4
@@ -71,7 +72,7 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 		SELECT $1, id, CASE WHEN url ~ '/[ci][a-z]*[0-9]+$' THEN 'new' WHEN url ~ '/u[0-9]+$' THEN 'vanished' ELSE 'retired' END
 		FROM pages WHERE project_id = $2 AND url ~ '/([cuf]|ign)[0-9]+$'`, checkID, p.ID)
 	s.Exec(`UPDATE checks SET count_new = 120, count_vanished = 30, count_retired = 75, count_failures = 75, count_skipped = 60 WHERE id = $1`, checkID)
-	return "/c/" + itoa(int64(checkID))
+	return s.CheckPath(int64(checkID))
 }
 
 // numbered is "https://shop.test/<prefix>NNN" for each n.
@@ -296,7 +297,7 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 		t.Errorf("section fragment: status %d, body %.200s", w.Code, w.Body.String())
 	}
 	slices.Sort(queries)
-	if want := []string{"CheckOwner", "CountFetchFailures", "GetCheck", "GetProject", "ListFetchFailures"}; !slices.Equal(queries, want) {
+	if want := []string{"CountFetchFailures", "GetCheckByNumber", "GetProject", "ListFetchFailures", "ProjectOwner"}; !slices.Equal(queries, want) {
 		t.Errorf("section request ran %v, want only %v", queries, want)
 	}
 
@@ -323,7 +324,7 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 		ran[q] = true
 	}
 	for q := range ran {
-		if !slices.Contains([]string{"CheckOwner", "GetCheck", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
+		if !slices.Contains([]string{"ProjectOwner", "GetCheckByNumber", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
 			t.Errorf("Changed section request ran %s (all: %v)", q, queries)
 		}
 	}
