@@ -30,6 +30,17 @@ To get a demo Project on first run, set `DEMO_DOMAIN` in `mise.local.toml` befor
 DEMO_DOMAIN = "example.com"
 ```
 
+## Users
+
+An Operator creates Users and resets passwords from the shell. The password is
+read from a no-echo prompt (with confirmation) on a terminal, otherwise from one
+line of stdin; never from a flag or environment variable.
+
+```sh
+mise run user:create me@example.com
+mise run user:reset-password me@example.com    # also signs the User out everywhere
+```
+
 ## Configuration
 
 Environment variables only. `mise.toml` supplies the development defaults, and per-developer overrides go in `mise.local.toml`.

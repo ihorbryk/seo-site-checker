@@ -78,6 +78,16 @@ description = "Create a goose migration: mise run migrate:new <name>"
 usage = 'arg "<name>"'
 run = 'goose -dir db/migrations create "$usage_name" sql'
 
+[tasks."user:create"]
+description = "Create a User: mise run user:create <email> (password from a prompt, or one stdin line)"
+usage = 'arg "<email>"'
+run = 'go run ./cmd/user create "$usage_email"'
+
+[tasks."user:reset-password"]
+description = "Reset a User's password and sign them out everywhere: mise run user:reset-password <email>"
+usage = 'arg "<email>"'
+run = 'go run ./cmd/user reset-password "$usage_email"'
+
 [tasks.seed]
 description = "Create the demo Project from DEMO_DOMAIN (no-op with a hint when unset)"
 run = "go run ./cmd/seed"
