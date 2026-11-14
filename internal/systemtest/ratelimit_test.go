@@ -37,7 +37,7 @@ func TestLoginAnswers429AfterTenFailuresForOneEmailEvenWithTheRightPassword(t *t
 	}
 	w := visitor.PostPlain("/login", credentials(s.User, ""))
 	wantTooMany(t, w)
-	if !strings.Contains(w.Body.String(), "<html") || sessionCookie(w) != nil {
+	if !strings.Contains(w.Body.String(), "<html") || s.SessionCookie(w) != nil {
 		t.Error("a plain post gets the full page and no session")
 	}
 	w = visitor.Post("/login", credentials(s.User, ""))

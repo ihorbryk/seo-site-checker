@@ -2,13 +2,14 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"html/template"
 	"net/http"
 	"strconv"
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
-	"github.com/ihorbryk/seo-site-checker/internal/session"
 	"github.com/ihorbryk/seo-site-checker/internal/user"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -28,9 +29,7 @@ func (s *server) passwordScreen(w http.ResponseWriter, r *http.Request, status i
 		return
 	}
 	if htmx {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(status)
-		_, _ = buf.WriteTo(w)
+		writeHTML(w, status, buf.Bytes())
 		return
 	}
 	data["Panel"] = template.HTML(buf.String())
@@ -83,26 +82,12 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 // replacePassword stores the new hash, signs the User out everywhere and
 // gives this browser a fresh session, all in one transaction.
 func (s *server) replacePassword(w http.ResponseWriter, r *http.Request, userID int64, hash string) error {
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
+	return s.startSessionAfter(w, r, userID, func(ctx context.Context, tx pgx.Tx) error {
+		q := dbgen.New(tx)
+		if err := q.SetUserPasswordHash(ctx, dbgen.SetUserPasswordHashParams{ID: userID, PasswordHash: hash}); err != nil {
+			return err
+		}
+		_, err := q.DeleteSessionsByUser(ctx, userID)
 		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	q := dbgen.New(tx)
-	if err := q.SetUserPasswordHash(ctx, dbgen.SetUserPasswordHashParams{ID: userID, PasswordHash: hash}); err != nil {
-		return err
-	}
-	if _, err := q.DeleteSessionsByUser(ctx, userID); err != nil {
-		return err
-	}
-	raw, err := session.Create(ctx, tx, userID, s.now())
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	s.setSessionCookie(w, raw)
-	return nil
+	})
 }

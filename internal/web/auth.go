@@ -39,18 +39,20 @@ func (s *server) sessionToken(r *http.Request) string {
 	return c.Value
 }
 
-func (s *server) setSessionCookie(w http.ResponseWriter, raw string) {
-	http.SetCookie(w, &http.Cookie{
-		Name: s.cookieName(), Value: raw, Path: "/", MaxAge: int(session.MaxAge / time.Second),
+// sessionCookie is the session cookie carrying value for maxAge seconds.
+func (s *server) sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{
+		Name: s.cookieName(), Value: value, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, Secure: !s.opts.InsecureCookies, SameSite: http.SameSiteLaxMode,
-	})
+	}
+}
+
+func (s *server) setSessionCookie(w http.ResponseWriter, raw string) {
+	http.SetCookie(w, s.sessionCookie(raw, int(session.MaxAge/time.Second)))
 }
 
 func (s *server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name: s.cookieName(), Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: !s.opts.InsecureCookies, SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, s.sessionCookie("", -1))
 }
 
 // signedInUser resolves the request's session cookie to its User.
@@ -127,23 +129,23 @@ func (s *server) requireOwner(kind ownerKind, next http.Handler) http.Handler {
 	})
 }
 
+// ownerLookups finds the owning User's id of a row of each ownerKind. Every
+// kind must have an entry: New refuses to start otherwise.
+var ownerLookups = map[ownerKind]func(*dbgen.Queries, context.Context, int64) (int64, error){
+	projectKind:  (*dbgen.Queries).ProjectOwner,
+	pageKind:     (*dbgen.Queries).PageOwner,
+	checkKind:    (*dbgen.Queries).CheckOwner,
+	snapshotKind: (*dbgen.Queries).SnapshotOwner,
+}
+
 // owns reports whether the row of kind with id belongs to a Project owned by
 // userID. A missing row is not owned.
 func (s *server) owns(ctx context.Context, kind ownerKind, id, userID int64) (bool, error) {
-	var owner int64
-	var err error
-	switch kind {
-	case projectKind:
-		owner, err = s.q.ProjectOwner(ctx, id)
-	case pageKind:
-		owner, err = s.q.PageOwner(ctx, id)
-	case checkKind:
-		owner, err = s.q.CheckOwner(ctx, id)
-	case snapshotKind:
-		owner, err = s.q.SnapshotOwner(ctx, id)
-	default:
+	lookup, ok := ownerLookups[kind]
+	if !ok {
 		panic("web: unknown ownerKind")
 	}
+	owner, err := lookup(s.q, ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

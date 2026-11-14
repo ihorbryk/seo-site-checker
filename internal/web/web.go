@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -82,6 +83,11 @@ func New(pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger, opts Op
 	tmpl, err := ParseTemplates()
 	if err != nil {
 		return nil, err
+	}
+	for k := ownerKind(0); k < ownerKindCount; k++ {
+		if _, ok := ownerLookups[k]; !ok {
+			return nil, fmt.Errorf("web: ownerKind %d has no owner lookup", k)
+		}
 	}
 	s := &server{pool: pool, river: rc, q: dbgen.New(pool), tmpl: tmpl, log: log, opts: opts, hasher: user.NewHasher(opts.Argon2)}
 	s.limits = newLimits(s.now)

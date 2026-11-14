@@ -58,7 +58,7 @@ func TestRegisteringReplacesTheSessionTheBrowserHeld(t *testing.T) {
 	if w := s.Browser.PostPlain("/register", registration("another@example.test", testfixtures.Password)); w.Code != http.StatusSeeOther {
 		t.Fatalf("status %d", w.Code)
 	}
-	if s.Browser.Token() == old || sessionCount(t, s, s.User) != 0 {
+	if s.Browser.Token() == old || s.SessionCount(s.User) != 0 {
 		t.Error("the held session must be replaced")
 	}
 }

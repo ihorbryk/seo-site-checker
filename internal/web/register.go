@@ -9,14 +9,17 @@ import (
 
 const errEmailTaken = "An account with this email already exists. Sign in instead."
 
-func (s *server) registerScreen(w http.ResponseWriter, r *http.Request, status int, email, emailErr, passwordErr, errMsg string) {
-	s.authPage(w, r, status, "Create account", "Create your account", "registerForm", map[string]any{
-		"Email": email, "EmailError": emailErr, "PasswordError": passwordErr, "Error": errMsg,
-	})
+// registerView is what the registration form template shows.
+type registerView struct {
+	Email, EmailError, PasswordError, Error string
+}
+
+func (s *server) registerScreen(w http.ResponseWriter, r *http.Request, status int, v registerView) {
+	s.authPage(w, r, status, "Create account", "Create your account", "registerForm", v)
 }
 
 func (s *server) registerPage(w http.ResponseWriter, r *http.Request) {
-	s.registerScreen(w, r, http.StatusOK, "", "", "", "")
+	s.registerScreen(w, r, http.StatusOK, registerView{})
 }
 
 // register creates a User and signs them in: validate, create, start a session.
@@ -24,7 +27,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	// Every attempt counts, successes included.
 	if retry, ok := s.reserve(limitCheck{l: s.limits.registerIP, key: s.clientIP(r)}); !ok {
-		s.registerScreen(w, r, http.StatusTooManyRequests, r.PostFormValue("email"), "", "", tooMany(w, retry))
+		s.registerScreen(w, r, http.StatusTooManyRequests, registerView{Email: r.PostFormValue("email"), Error: tooMany(w, retry)})
 		return
 	}
 	email := r.PostFormValue("email")
@@ -39,14 +42,14 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		passwordErr = err.Error()
 	}
 	if emailErr != "" || passwordErr != "" {
-		s.registerScreen(w, r, http.StatusUnprocessableEntity, email, emailErr, passwordErr, "")
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, registerView{Email: email, EmailError: emailErr, PasswordError: passwordErr})
 		return
 	}
 
 	u, err := user.Create(r.Context(), s.pool, s.hasher, norm, password)
 	switch {
 	case errors.Is(err, user.ErrEmailTaken):
-		s.registerScreen(w, r, http.StatusUnprocessableEntity, norm, errEmailTaken, "", "")
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, registerView{Email: norm, EmailError: errEmailTaken})
 		return
 	case err != nil:
 		s.fail(w, r, err)

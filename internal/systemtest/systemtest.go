@@ -162,6 +162,28 @@ func New(t testing.TB, opts ...Option) *System {
 	return s
 }
 
+// SessionCookie returns the session cookie w sets or clears, or nil if it
+// touches none.
+func (s *System) SessionCookie(w *httptest.ResponseRecorder) *http.Cookie {
+	name := web.CookieName(s.webOpts.InsecureCookies)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// SessionCount is the number of sessions u holds.
+func (s *System) SessionCount(u dbgen.User) int64 {
+	s.T.Helper()
+	n, err := s.Q.CountSessionsByUser(context.Background(), u.ID)
+	if err != nil {
+		s.T.Fatal(err)
+	}
+	return n
+}
+
 // WebQueries runs f and returns the names of the sqlc queries (e.g.
 // "ListCheckDiffRows") the web app ran meanwhile, one entry per execution.
 // The session lookup every signed-in request makes is left out: it is

@@ -26,7 +26,7 @@ func TestChangingThePasswordSignsOutOtherDevicesAndKeepsThisOne(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Password changed. You&#39;re signed out on every other device.") {
 		t.Fatalf("status %d, body %q", w.Code, w.Body.String())
 	}
-	if c := sessionCookie(w); c == nil || c.Value == "" || c.Value == before {
+	if c := s.SessionCookie(w); c == nil || c.Value == "" || c.Value == before {
 		t.Fatalf("the current session must rotate to a fresh token, got %+v", c)
 	}
 	if s.Get("/").Code != 200 {
@@ -35,7 +35,7 @@ func TestChangingThePasswordSignsOutOtherDevicesAndKeepsThisOne(t *testing.T) {
 	if got := other.Get("/"); got.Code != http.StatusSeeOther {
 		t.Errorf("the other device: status %d, want signed out", got.Code)
 	}
-	if n := sessionCount(t, s, s.User); n != 1 {
+	if n := s.SessionCount(s.User); n != 1 {
 		t.Errorf("%d sessions, want only the rotated one", n)
 	}
 
@@ -93,7 +93,7 @@ func TestWrongCurrentPasswordIsRefusedInline(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Current password is wrong.") {
 			t.Errorf("%s: status %d, body %q", name, w.Code, w.Body.String())
 		}
-		if sessionCookie(w) != nil {
+		if s.SessionCookie(w) != nil {
 			t.Errorf("%s: no cookie change on failure", name)
 		}
 	}

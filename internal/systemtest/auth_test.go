@@ -3,7 +3,6 @@ package systemtest_test
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -18,24 +17,6 @@ import (
 
 func credentials(u dbgen.User, next string) url.Values {
 	return url.Values{"email": {u.Email}, "password": {testfixtures.Password}, "next": {next}}
-}
-
-func sessionCookie(w *httptest.ResponseRecorder) *http.Cookie {
-	for _, c := range w.Result().Cookies() {
-		if c.Name == "__Host-session" || c.Name == "session" {
-			return c
-		}
-	}
-	return nil
-}
-
-func sessionCount(t *testing.T, s *systemtest.System, u dbgen.User) int64 {
-	t.Helper()
-	n, err := s.Q.CountSessionsByUser(context.Background(), u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 func TestSignedOutVisitorIsSentToSignInAndBackToWhereTheyWere(t *testing.T) {
@@ -123,7 +104,7 @@ func TestWrongCredentialsGetOneGenericMessageAndKeepTheEmail(t *testing.T) {
 		if d.Find("input[name=password]").AttrOr("value", "") != "" {
 			t.Errorf("%s: the password must never be echoed", name)
 		}
-		if sessionCookie(w) != nil {
+		if s.SessionCookie(w) != nil {
 			t.Errorf("%s: no cookie on failure", name)
 		}
 	}
@@ -183,10 +164,10 @@ func TestHeaderShowsTheEmailAndSignOutEndsTheSession(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login?signedout=1" {
 		t.Fatalf("logout: status %d, Location %q", w.Code, w.Header().Get("Location"))
 	}
-	if c := sessionCookie(w); c == nil || c.MaxAge >= 0 {
+	if c := s.SessionCookie(w); c == nil || c.MaxAge >= 0 {
 		t.Errorf("logout must clear the cookie, got %+v", c)
 	}
-	if n := sessionCount(t, s, s.User); n != 0 {
+	if n := s.SessionCount(s.User); n != 0 {
 		t.Errorf("%d sessions left", n)
 	}
 	if got := s.Get("/"); got.Code != http.StatusSeeOther {
@@ -206,7 +187,7 @@ func TestSigningInAgainReplacesTheSessionTheBrowserHeld(t *testing.T) {
 	if s.Browser.Token() == old {
 		t.Fatal("sign-in must issue a new token")
 	}
-	if n := sessionCount(t, s, s.User); n != 1 {
+	if n := s.SessionCount(s.User); n != 1 {
 		t.Fatalf("%d sessions, want only the new one", n)
 	}
 }
@@ -214,7 +195,7 @@ func TestSigningInAgainReplacesTheSessionTheBrowserHeld(t *testing.T) {
 func TestSessionCookieAttributesAndHSTS(t *testing.T) {
 	s := systemtest.New(t)
 	w := s.SignedOut().PostPlain("/login", credentials(s.User, ""))
-	c := sessionCookie(w)
+	c := s.SessionCookie(w)
 	if c == nil || c.Name != "__Host-session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode ||
 		c.Path != "/" || c.MaxAge != 30*24*60*60 || c.Domain != "" || c.Value == "" {
 		t.Fatalf("cookie = %+v", c)
@@ -230,7 +211,7 @@ func TestSessionCookieAttributesAndHSTS(t *testing.T) {
 func TestInsecureCookiesGivesAPlainCookieAndNoHSTS(t *testing.T) {
 	s := systemtest.New(t, systemtest.InsecureCookies())
 	w := s.SignedOut().PostPlain("/login", credentials(s.User, ""))
-	c := sessionCookie(w)
+	c := s.SessionCookie(w)
 	if c == nil || c.Name != "session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" {
 		t.Fatalf("cookie = %+v", c)
 	}

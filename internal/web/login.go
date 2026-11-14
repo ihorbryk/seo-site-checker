@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"html/template"
 	"net/http"
@@ -22,7 +23,7 @@ const (
 // authPage writes a sign-in/registration screen: the form alone for htmx
 // (which swaps the form itself), else a standalone document in the split
 // layout. formTmpl names the form template.
-func (s *server) authPage(w http.ResponseWriter, r *http.Request, status int, title, heading, formTmpl string, data map[string]any) {
+func (s *server) authPage(w http.ResponseWriter, r *http.Request, status int, title, heading, formTmpl string, data any) {
 	var form bytes.Buffer
 	if err := s.tmpl.ExecuteTemplate(&form, formTmpl, data); err != nil {
 		s.fail(w, r, err)
@@ -49,30 +50,40 @@ func (s *server) authPage(w http.ResponseWriter, r *http.Request, status int, ti
 		}
 		out = page.Bytes()
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_, _ = w.Write(out)
+	writeHTML(w, status, out)
 }
 
-func (s *server) loginScreen(w http.ResponseWriter, r *http.Request, status int, email, next, errMsg string) {
-	if !localPath(next) {
-		next = ""
+// writeHTML sends body as an HTML response with the given status.
+func writeHTML(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// loginView is what the sign-in form template shows. Callers set Email, Next
+// and Error; loginScreen fills in the rest.
+type loginView struct {
+	Email, Next, Error string
+	Notice             string
+	CanRegister        bool
+}
+
+func (s *server) loginScreen(w http.ResponseWriter, r *http.Request, status int, v loginView) {
+	if !localPath(v.Next) {
+		v.Next = ""
 	}
-	notice := ""
 	switch {
 	case r.URL.Query().Get("signedout") == "1":
-		notice = noticeSignedOut
-	case next != "":
-		notice = noticeSignInToContinue
+		v.Notice = noticeSignedOut
+	case v.Next != "":
+		v.Notice = noticeSignInToContinue
 	}
-	s.authPage(w, r, status, "Sign in", "Sign in", "loginForm", map[string]any{
-		"Email": email, "Next": next, "Notice": notice, "Error": errMsg,
-		"CanRegister": !s.opts.DenyRegistration,
-	})
+	v.CanRegister = !s.opts.DenyRegistration
+	s.authPage(w, r, status, "Sign in", "Sign in", "loginForm", v)
 }
 
 func (s *server) loginPage(w http.ResponseWriter, r *http.Request) {
-	s.loginScreen(w, r, http.StatusOK, "", r.URL.Query().Get("next"), "")
+	s.loginScreen(w, r, http.StatusOK, loginView{Next: r.URL.Query().Get("next")})
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +91,9 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	email := user.CanonicalEmail(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
 	next := r.PostFormValue("next")
-	refuse := func(msg string) { s.loginScreen(w, r, http.StatusUnprocessableEntity, email, next, msg) }
+	refuse := func(msg string) {
+		s.loginScreen(w, r, http.StatusUnprocessableEntity, loginView{Email: email, Next: next, Error: msg})
+	}
 
 	if email == "" || password == "" {
 		refuse(errMissingCredentials)
@@ -92,7 +105,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := limitCheck{l: s.limits.loginIP, key: s.clientIP(r)}
 	em := limitCheck{l: s.limits.loginEmail, key: emailKey(email)}
 	if retry, ok := s.reserve(ip, em); !ok {
-		s.loginScreen(w, r, http.StatusTooManyRequests, email, next, tooMany(w, retry))
+		s.loginScreen(w, r, http.StatusTooManyRequests, loginView{Email: email, Next: next, Error: tooMany(w, retry)})
 		return
 	}
 	u, err := s.q.GetUserByEmail(r.Context(), email)
@@ -146,16 +159,25 @@ func (s *server) upgradeHash(r *http.Request, userID int64, password string) {
 // session and deletes any the browser held, so a planted token never becomes
 // a signed-in one.
 func (s *server) startSession(w http.ResponseWriter, r *http.Request, userID int64) error {
+	return s.startSessionAfter(w, r, userID, func(ctx context.Context, tx pgx.Tx) error {
+		if old := s.sessionToken(r); old != "" {
+			return session.Delete(ctx, tx, old)
+		}
+		return nil
+	})
+}
+
+// startSessionAfter runs prepare, then creates userID's new session and sets
+// its cookie, all in one transaction.
+func (s *server) startSessionAfter(w http.ResponseWriter, r *http.Request, userID int64, prepare func(ctx context.Context, tx pgx.Tx) error) error {
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	if old := s.sessionToken(r); old != "" {
-		if err := session.Delete(ctx, tx, old); err != nil {
-			return err
-		}
+	if err := prepare(ctx, tx); err != nil {
+		return err
 	}
 	raw, err := session.Create(ctx, tx, userID, s.now())
 	if err != nil {

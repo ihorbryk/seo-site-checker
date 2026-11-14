@@ -20,6 +20,8 @@ const (
 	pageKind
 	checkKind
 	snapshotKind
+
+	ownerKindCount // not a kind: the number of kinds
 )
 
 // access is who may reach a route. Every route declares one in the table
