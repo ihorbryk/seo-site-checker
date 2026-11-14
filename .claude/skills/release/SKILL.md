@@ -40,7 +40,7 @@ Write the notes in the language of `GLOSSARY.md` (Check, Page pool, Snapshot, Di
 ## Changed
 ## Fixed
 ## Upgrading
-- Run `mise run migrate` (this release adds <n> migrations).
+- Run `mise run migrate` (this release adds <n> migrations). With Docker Compose: set `VERSION=<x.y.z>` in `.env`, then `docker compose pull && docker compose up -d` (`migrate` runs first).
 ```
 
 Omit empty sections; include **Upgrading** only when there are new migrations. Internal-only PRs (tests, CI, refactors) collapse into one closing line: "Plus <n> internal changes."
