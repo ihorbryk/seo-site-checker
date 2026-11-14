@@ -8,6 +8,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
+	"github.com/ihorbryk/seo-site-checker/internal/testfixtures"
 )
 
 func TestNormalizeDomain(t *testing.T) {
@@ -59,8 +60,9 @@ func TestNormalizeDomain(t *testing.T) {
 func TestAddCreatesProjectWithSeedPageAndDefaults(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+	owner := testfixtures.User(t, pool)
 
-	p, err := project.Add(ctx, pool, " Example.com ")
+	p, err := project.Add(ctx, pool, owner.ID, " Example.com ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +87,13 @@ func TestAddCreatesProjectWithSeedPageAndDefaults(t *testing.T) {
 func TestEnsureDemoCreatesAManualProjectOnceOnly(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
+	owner := testfixtures.User(t, pool)
 
-	created, err := project.EnsureDemo(ctx, pool, "Demo.example")
+	created, err := project.EnsureDemo(ctx, pool, owner.ID, "Demo.example")
 	if err != nil || !created {
 		t.Fatalf("first call: created=%v err=%v", created, err)
 	}
-	created, err = project.EnsureDemo(ctx, pool, "demo.example")
+	created, err = project.EnsureDemo(ctx, pool, owner.ID, "demo.example")
 	if err != nil || created {
 		t.Fatalf("second call must be a no-op: created=%v err=%v", created, err)
 	}
@@ -108,7 +111,8 @@ func TestEnsureDemoCreatesAManualProjectOnceOnly(t *testing.T) {
 func TestDomainIsImmutable(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
-	p, err := project.Add(ctx, pool, "example.com")
+	owner := testfixtures.User(t, pool)
+	p, err := project.Add(ctx, pool, owner.ID, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,21 +124,41 @@ func TestDomainIsImmutable(t *testing.T) {
 func TestAddRejectsDuplicateDomainAndCreatesNothingExtra(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
-	if _, err := project.Add(ctx, pool, "example.com"); err != nil {
+	owner := testfixtures.User(t, pool)
+	if _, err := project.Add(ctx, pool, owner.ID, "example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := project.Add(ctx, pool, "https://EXAMPLE.com/"); !errors.Is(err, project.ErrDuplicate) {
+	if _, err := project.Add(ctx, pool, owner.ID, "https://EXAMPLE.com/"); !errors.Is(err, project.ErrDuplicate) {
 		t.Fatalf("want ErrDuplicate, got %v", err)
 	}
 	// www is a different exact host, so a different Project.
-	if _, err := project.Add(ctx, pool, "www.example.com"); err != nil {
+	if _, err := project.Add(ctx, pool, owner.ID, "www.example.com"); err != nil {
 		t.Fatalf("www.example.com is a separate Project: %v", err)
 	}
-	if _, err := project.Add(ctx, pool, "not a domain"); !errors.Is(err, project.ErrInvalidDomain) {
+	if _, err := project.Add(ctx, pool, owner.ID, "not a domain"); !errors.Is(err, project.ErrInvalidDomain) {
 		t.Fatalf("want ErrInvalidDomain, got %v", err)
 	}
 	projects, _ := dbgen.New(pool).ListProjects(ctx)
 	if len(projects) != 2 {
 		t.Fatalf("want 2 Projects, got %d", len(projects))
+	}
+}
+
+func TestTheSameDomainCanBelongToTwoUsersButOnlyOncePerUser(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	a, b := testfixtures.User(t, pool), testfixtures.User(t, pool)
+
+	if _, err := project.Add(ctx, pool, a.ID, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := project.Add(ctx, pool, b.ID, "example.com"); err != nil {
+		t.Fatalf("another User may add the same domain: %v", err)
+	}
+	if _, err := project.Add(ctx, pool, a.ID, "example.com"); !errors.Is(err, project.ErrDuplicate) {
+		t.Fatalf("want ErrDuplicate for the same owner, got %v", err)
+	}
+	if created, err := project.EnsureDemo(ctx, pool, b.ID, "example.com"); err != nil || created {
+		t.Fatalf("the demo Project is looked up per owner: created=%v err=%v", created, err)
 	}
 }

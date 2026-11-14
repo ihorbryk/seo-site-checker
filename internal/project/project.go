@@ -67,16 +67,17 @@ type Beginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// Add creates a Project with the default Request settings and its seed Page
-// https://<domain>/ in one transaction.
-func Add(ctx context.Context, db Beginner, input string) (dbgen.Project, error) {
-	return AddWithSchedule(ctx, db, input, "daily")
+// Add creates a Project owned by ownerID with the default Request settings and
+// its seed Page https://<domain>/ in one transaction. ErrDuplicate means that
+// owner already has a Project for the domain.
+func Add(ctx context.Context, db Beginner, ownerID int64, input string) (dbgen.Project, error) {
+	return AddWithSchedule(ctx, db, ownerID, input, "daily")
 }
 
-// EnsureDemo creates the manual-only demo Project for domain unless a Project
-// for it exists, and reports whether it created one.
-func EnsureDemo(ctx context.Context, db Beginner, domain string) (bool, error) {
-	_, err := AddWithSchedule(ctx, db, domain, "manual") // pageliterals:ok schedule value, not a Page origin
+// EnsureDemo creates the manual-only demo Project for domain under ownerID
+// unless that owner already has one, and reports whether it created one.
+func EnsureDemo(ctx context.Context, db Beginner, ownerID int64, domain string) (bool, error) {
+	_, err := AddWithSchedule(ctx, db, ownerID, domain, "manual") // pageliterals:ok schedule value, not a Page origin
 	if errors.Is(err, ErrDuplicate) {
 		return false, nil
 	}
@@ -84,7 +85,7 @@ func EnsureDemo(ctx context.Context, db Beginner, domain string) (bool, error) {
 }
 
 // AddWithSchedule is Add with a chosen schedule (the demo Project is "manual").
-func AddWithSchedule(ctx context.Context, db Beginner, input, schedule string) (dbgen.Project, error) {
+func AddWithSchedule(ctx context.Context, db Beginner, ownerID int64, input, schedule string) (dbgen.Project, error) {
 	domain, err := NormalizeDomain(input)
 	if err != nil {
 		return dbgen.Project{}, err
@@ -96,7 +97,7 @@ func AddWithSchedule(ctx context.Context, db Beginner, input, schedule string) (
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 
 	q := dbgen.New(tx)
-	p, err := q.CreateProject(ctx, dbgen.CreateProjectParams{Domain: domain, Schedule: schedule})
+	p, err := q.CreateProject(ctx, dbgen.CreateProjectParams{OwnerID: ownerID, Domain: domain, Schedule: schedule})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

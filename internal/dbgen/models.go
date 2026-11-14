@@ -164,6 +164,7 @@ type Project struct {
 	CustomHeaders   []byte
 	ExcludePatterns []string
 	CreatedAt       time.Time
+	OwnerID         int64
 }
 
 type RiverJob struct {
@@ -209,6 +210,14 @@ type RiverQueue struct {
 	UpdatedAt time.Time
 }
 
+type Session struct {
+	TokenHash  []byte
+	UserID     int64
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+}
+
 type Snapshot struct {
 	ID         int64
 	PageID     int64
@@ -218,4 +227,11 @@ type Snapshot struct {
 	Headers    []byte
 	BodySha256 []byte
 	SeoFields  []byte
+}
+
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	CreatedAt    time.Time
 }

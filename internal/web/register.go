@@ -1,0 +1,63 @@
+package web
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/ihorbryk/seo-site-checker/internal/user"
+)
+
+const errEmailTaken = "An account with this email already exists. Sign in instead."
+
+// registerView is what the registration form template shows.
+type registerView struct {
+	Email, EmailError, PasswordError, Error string
+}
+
+func (s *server) registerScreen(w http.ResponseWriter, r *http.Request, status int, v registerView) {
+	s.authPage(w, r, status, "Create account", "Create your account", "registerForm", v)
+}
+
+func (s *server) registerPage(w http.ResponseWriter, r *http.Request) {
+	s.registerScreen(w, r, http.StatusOK, registerView{})
+}
+
+// register creates a User and signs them in: validate, create, start a session.
+func (s *server) register(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	// Every attempt counts, successes included.
+	if retry, ok := s.reserve(limitCheck{l: s.limits.registerIP, key: s.clientIP(r)}); !ok {
+		s.registerScreen(w, r, http.StatusTooManyRequests, registerView{Email: r.PostFormValue("email"), Error: tooMany(w, retry)})
+		return
+	}
+	email := r.PostFormValue("email")
+	password := r.PostFormValue("password")
+
+	var emailErr, passwordErr string
+	norm, err := user.NormalizeEmail(email)
+	if err != nil {
+		emailErr = err.Error()
+	}
+	if err := user.ValidatePassword(password); err != nil {
+		passwordErr = err.Error()
+	}
+	if emailErr != "" || passwordErr != "" {
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, registerView{Email: email, EmailError: emailErr, PasswordError: passwordErr})
+		return
+	}
+
+	u, err := user.Create(r.Context(), s.pool, s.hasher, norm, password)
+	switch {
+	case errors.Is(err, user.ErrEmailTaken):
+		s.registerScreen(w, r, http.StatusUnprocessableEntity, registerView{Email: norm, EmailError: errEmailTaken})
+		return
+	case err != nil:
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.startSession(w, r, u.ID); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sendTo(w, r, "/")
+}

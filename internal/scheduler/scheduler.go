@@ -11,6 +11,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/session"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,11 +68,22 @@ func startOne(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx],
 	return tx.Commit(ctx)
 }
 
-// Run calls Tick every Interval until ctx ends.
+// Housekeep deletes sessions past either expiry. Correctness comes from the
+// session lookup; this only keeps the table small. Kept out of Tick so tests
+// that tick on a fake clock don't expire real sessions.
+func Housekeep(ctx context.Context, pool *pgxpool.Pool, now time.Time) error {
+	_, err := session.Prune(ctx, pool, now)
+	return err
+}
+
+// Run calls Tick (and Housekeep) every Interval until ctx ends.
 func Run(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log *slog.Logger) {
 	t := time.NewTicker(Interval)
 	defer t.Stop()
 	for {
+		if err := Housekeep(ctx, pool, time.Now()); err != nil {
+			log.Error("prune expired sessions", "err", err)
+		}
 		if n, err := Tick(ctx, pool, rc, time.Now(), log); err != nil {
 			log.Error("scheduler tick", "err", err)
 		} else if n > 0 {

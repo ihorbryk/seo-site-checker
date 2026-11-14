@@ -23,11 +23,24 @@ mise run dev      # start postgres, migrate, seed, then web, scheduler and worke
 
 Open <http://127.0.0.1:8089>. Stop everything with `mise run stop`.
 
-To get a demo Project on first run, set `DEMO_DOMAIN` in `mise.local.toml` before `mise run dev`:
+To get a demo User and Project on first run, set `DEMO_DOMAIN`, `DEMO_EMAIL` and `DEMO_PASSWORD` (at least 15 characters) in `mise.local.toml` before `mise run dev`, then sign in with them:
 
 ```toml
 [env]
 DEMO_DOMAIN = "example.com"
+DEMO_EMAIL = "demo@example.com"
+DEMO_PASSWORD = "a password of 15+ chars"
+```
+
+## Users
+
+An Operator creates Users and resets passwords from the shell. The password is
+read from a no-echo prompt (with confirmation) on a terminal, otherwise from one
+line of stdin; never from a flag or environment variable.
+
+```sh
+mise run user:create me@example.com
+mise run user:reset-password me@example.com    # also signs the User out everywhere
 ```
 
 ## Configuration
@@ -40,7 +53,16 @@ Environment variables only. `mise.toml` supplies the development defaults, and p
 | `WEB_ADDR` | `127.0.0.1:8089` | Address the web UI listens on |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 | `WORKER_CONCURRENCY` | `20` | Jobs one worker process runs at once |
+| `ARGON2_MEMORY_KIB` | `19456` | argon2id memory cost in KiB for password hashing |
+| `ARGON2_TIME` | `2` | argon2id iterations |
+| `ARGON2_THREADS` | `1` | argon2id parallelism |
+| `INSECURE_COOKIES` | `false` | `true` serves a plain `session` cookie without `Secure` and sends no HSTS, for local development over `http://`. `mise.toml` sets it for dev; leave it unset in production |
+| `DENY_REGISTRATION` | `false` | `true` closes self-registration: `/register` returns 404 and `/login` says accounts are created by the operator |
+| `TRUSTED_PROXY_HEADER` | unset | Header holding the client IP behind a reverse proxy (e.g. `X-Forwarded-For`); its rightmost entry keys the sign-in and registration rate limits. Unset uses the connection's address. Set it only when the proxy overwrites the header, or clients can spoof it |
+| `BOOTSTRAP_EMAIL` | unset | Read by the migration that gives Projects owners: an existing install's Projects pass to a locked User with this email (reset its password with `mise run user:reset-password`). Required only when Projects exist; a fresh install needs nothing |
 | `DEMO_DOMAIN` | unset | Used by `mise run seed` only: creates a manual-only demo Project for this domain |
+| `DEMO_EMAIL` | unset | `seed` only: the demo User who owns the demo Project (created if missing) |
+| `DEMO_PASSWORD` | unset | `seed` only: the demo User's password when it is created; an existing User's password is never changed. `seed` does nothing unless all three `DEMO_*` variables are set |
 
 ## Development
 

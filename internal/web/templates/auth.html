@@ -1,0 +1,68 @@
+{{/* Sign-in and registration: standalone documents outside the app shell, split layout. */}}
+
+{{define "authDoc"}}<!doctype html><html lang="en"><head>{{template "head" .}}</head><body class="min-h-screen text-sm text-base-content">
+<div class="grid min-h-screen lg:grid-cols-2">
+  <section class="hidden flex-col justify-between gap-10 bg-neutral p-10 text-neutral-content lg:flex">
+    <div class="font-bold">SEO Site Checker</div>
+    <div class="max-w-md">
+      <p class="text-2xl font-semibold">Know when a deploy changes what search engines see.</p>
+      <ul class="mt-4 list-disc pl-5 text-neutral-content/80">
+        <li>Scheduled Checks of every Page in a Project</li>
+        <li>Diffs of titles, canonicals, robots and bodies</li>
+        <li>Reports ranked by what matters for SEO</li>
+      </ul>
+    </div>
+    <div class="text-xs text-neutral-content/50">Self-hosted. Your Projects are visible only to you.</div>
+  </section>
+  <section class="grid place-items-center bg-base-100 p-10">
+    <div class="w-full max-w-sm">
+      <div class="mb-6 font-bold lg:hidden">SEO Site Checker</div>
+      <h1>{{.Heading}}</h1>
+      {{.Form}}
+      {{with .Below}}<div class="mt-4 text-sm">{{.}}</div>{{end}}
+    </div>
+  </section>
+</div>
+</body></html>
+{{end}}
+
+{{/* Pieces the auth forms share. */}}
+
+{{define "authNotice"}}{{if .}}<div role="status" class="notice alert alert-info alert-soft py-2">{{.}}</div>{{end}}{{end}}
+
+{{define "authError"}}{{if .}}<div role="alert" class="alert alert-error alert-soft py-2">{{.}}</div>{{end}}{{end}}
+
+{{define "showPassword"}}<label class="label mt-1 cursor-pointer text-xs"><input type="checkbox" class="checkbox checkbox-xs" onchange="this.form.querySelectorAll('input[type=password],input[data-pw]').forEach(i=>{i.dataset.pw=1;i.type=this.checked?'text':'password'})"> Show password</label>{{end}}
+
+{{define "loginFormBelow"}}{{if .CanRegister}}No account? <a class="link link-primary" href="/register">Create one</a>{{else}}Accounts are created by the operator of this site.{{end}}{{end}}
+
+{{define "registerFormBelow"}}Already have an account? <a class="link link-primary" href="/login">Sign in</a>{{end}}
+
+{{define "registerForm"}}
+<form method="post" action="/register" hx-post="/register" hx-target="this" hx-swap="outerHTML" class="flex flex-col gap-1">
+{{template "authError" .Error}}
+<label class="label mt-2 font-semibold text-base-content" for="f-email">Email</label>
+<input id="f-email" type="email" name="email" value="{{.Email}}" autocomplete="username" required autofocus class="input input-sm w-full{{if .EmailError}} input-error{{end}}">
+{{with .EmailError}}<p data-field="email" class="text-xs text-error">{{.}}</p>{{end}}
+<label class="label mt-2 font-semibold text-base-content" for="f-password">Password</label>
+<input id="f-password" type="password" name="password" autocomplete="new-password" minlength="15" required class="input input-sm w-full{{if .PasswordError}} input-error{{end}}">
+{{with .PasswordError}}<p data-field="password" class="text-xs text-error">{{.}}</p>{{end}}
+<p class="text-xs text-base-content/60">At least 15 characters. A few unrelated words work well.</p>
+{{template "showPassword"}}
+<button class="btn btn-sm btn-primary mt-4">Create account</button>
+</form>
+{{end}}
+
+{{define "loginForm"}}
+<form method="post" action="/login" hx-post="/login" hx-target="this" hx-swap="outerHTML" class="flex flex-col gap-1">
+{{template "authNotice" .Notice}}
+{{template "authError" .Error}}
+{{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+<label class="label mt-2 font-semibold text-base-content" for="f-email">Email</label>
+<input id="f-email" type="email" name="email" value="{{.Email}}" autocomplete="username" required autofocus class="input input-sm w-full">
+<label class="label mt-2 font-semibold text-base-content" for="f-password">Password</label>
+<input id="f-password" type="password" name="password" autocomplete="current-password" required class="input input-sm w-full">
+{{template "showPassword"}}
+<button class="btn btn-sm btn-primary mt-4">Sign in</button>
+</form>
+{{end}}
