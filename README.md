@@ -6,7 +6,7 @@ Each monitored site is a **Project**. On its schedule (or on demand) the checker
 
 The exact meaning of every term is in [`GLOSSARY.md`](GLOSSARY.md).
 
-> **Status:** early, single-user and meant to run locally. There is no authentication and no deployment setup, so don't expose the web UI publicly.
+> **Status:** early. Users sign in with a password, and registration can be closed. To expose the web UI beyond your own machine, run it behind a reverse proxy that terminates TLS (see [Run in production](#run-in-production-with-docker-compose)).
 
 ## Architecture
 
@@ -31,6 +31,17 @@ DEMO_DOMAIN = "example.com"
 DEMO_EMAIL = "demo@example.com"
 DEMO_PASSWORD = "a password of 15+ chars"
 ```
+
+## Run in production with Docker Compose
+
+Every GitHub Release publishes images to GHCR (`ghcr.io/ihorbryk/seo-site-checker/{web,scheduler,worker,operator}`, amd64 and arm64) and attaches `compose.yaml` and `.env.example`. A server needs only Docker.
+
+1. **Install.** Download `compose.yaml` and `.env.example` from the [release](https://github.com/ihorbryk/seo-site-checker/releases) into one directory, then `cp .env.example .env` and set `VERSION` (the release without the `v`) and `POSTGRES_PASSWORD` (URL-safe characters only, it goes into `DATABASE_URL`). Registration is closed and cookies are secure by default.
+2. **Start.** `docker compose up -d`. The `migrate` service applies migrations first, then `web`, `scheduler` and `worker` start. A failed migration stops the rollout and the three processes never start.
+3. **First User.** `docker compose run --rm -it operator /user create me@example.com`. Reset a password with `... operator /user reset-password me@example.com`.
+4. **Upgrade.** Bump `VERSION` in `.env`, then `docker compose pull` and `docker compose up -d`. `migrate` runs before the processes restart.
+
+The web UI listens on `127.0.0.1:8089` only. Put a reverse proxy on the host that terminates TLS and forwards to it. Cookies are `Secure`, so sign-in does not work over plain `http://` from another machine. Set `TRUSTED_PROXY_HEADER` in `.env` only if the proxy overwrites that header. When upgrading an install that already has Projects (before Users existed), set `BOOTSTRAP_EMAIL` for the first `up`. Variables are described in [Configuration](#configuration).
 
 ## Users
 
@@ -66,6 +77,7 @@ Environment variables only. `mise.toml` supplies the development defaults, and p
 
 ## Development
 
+- Release notes (drafted by the `release` skill): each **Upgrading** section gives the Docker Compose commands (bump `VERSION`, `docker compose pull`, `docker compose up -d`) alongside the `mise run migrate` one.
 - Tests, the shared Postgres, migrations, sqlc and lint: [`docs/testing.md`](docs/testing.md)
 - Review conventions: [`CODING_STANDARDS.md`](CODING_STANDARDS.md)
 - Domain language: [`GLOSSARY.md`](GLOSSARY.md)

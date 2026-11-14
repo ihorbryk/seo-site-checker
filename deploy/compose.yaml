@@ -1,0 +1,82 @@
+# Production deployment of SEO Site Checker. Copy .env.example to .env next to
+# this file, set VERSION and POSTGRES_PASSWORD, then run `docker compose up -d`.
+# See "Run in production with Docker Compose" in the README.
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/seo_checker?sslmode=disable
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-20}
+  ARGON2_MEMORY_KIB: ${ARGON2_MEMORY_KIB:-19456}
+  ARGON2_TIME: ${ARGON2_TIME:-2}
+  ARGON2_THREADS: ${ARGON2_THREADS:-1}
+  DENY_REGISTRATION: ${DENY_REGISTRATION:-true}
+  TRUSTED_PROXY_HEADER: ${TRUSTED_PROXY_HEADER:-}
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: seo_checker
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seo_checker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies migrations, then exits. A failure stops the rollout.
+  migrate:
+    image: ghcr.io/ihorbryk/seo-site-checker/operator:${VERSION:?set VERSION in .env}
+    command: ["/migrate"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/seo_checker?sslmode=disable
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    image: ghcr.io/ihorbryk/seo-site-checker/web:${VERSION:?set VERSION in .env}
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      WEB_ADDR: 0.0.0.0:8089
+    ports:
+      # Loopback only: put a TLS-terminating reverse proxy in front.
+      - "127.0.0.1:8089:8089"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    image: ghcr.io/ihorbryk/seo-site-checker/scheduler:${VERSION:?set VERSION in .env}
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    image: ghcr.io/ihorbryk/seo-site-checker/worker:${VERSION:?set VERSION in .env}
+    restart: unless-stopped
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Operator commands; never started by `up`. Run for example:
+  #   docker compose run --rm -it operator /user create me@example.com
+  operator:
+    image: ghcr.io/ihorbryk/seo-site-checker/operator:${VERSION:?set VERSION in .env}
+    profiles: ["tools"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
