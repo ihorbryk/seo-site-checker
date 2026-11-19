@@ -12,6 +12,59 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addFinalizeBatchCounts = `-- name: AddFinalizeBatchCounts :exec
+UPDATE checks SET finalize_cursor = $1::bigint,
+    count_snapshots = count_snapshots + b.snapshots, count_failures = count_failures + b.failures,
+    count_skipped = count_skipped + b.skipped,
+    count_new = count_new + e.new, count_vanished = count_vanished + e.vanished, count_retired = count_retired + e.retired
+FROM (
+    SELECT count(*) FILTER (WHERE bf.outcome = 'snapshot')::int AS snapshots,
+           count(*) FILTER (WHERE bf.outcome = 'failure')::int AS failures,
+           count(*) FILTER (WHERE bf.outcome = 'skipped')::int AS skipped
+    FROM fetches bf
+    WHERE bf.check_id = $2 AND bf.page_id > $3 AND bf.page_id <= $1
+) b, (
+    SELECT count(*) FILTER (WHERE be.kind IN ('new', 'reactivated'))::int AS new,
+           count(*) FILTER (WHERE be.kind = 'vanished')::int AS vanished,
+           count(*) FILTER (WHERE be.kind = 'retired')::int AS retired
+    FROM page_events be
+    WHERE be.check_id = $2 AND be.page_id > $3 AND be.page_id <= $1
+) e
+WHERE checks.id = $2
+`
+
+type AddFinalizeBatchCountsParams struct {
+	UptoID  int64
+	CheckID int64
+	AfterID int64
+}
+
+// Adds the batch's Fetch outcomes and page events to the Report counts and
+// moves the cursor past it.
+func (q *Queries) AddFinalizeBatchCounts(ctx context.Context, arg AddFinalizeBatchCountsParams) error {
+	_, err := q.db.Exec(ctx, addFinalizeBatchCounts, arg.UptoID, arg.CheckID, arg.AfterID)
+	return err
+}
+
+const beginFinalize = `-- name: BeginFinalize :exec
+
+UPDATE checks SET finalize_cursor = 0,
+    first_fetch_id = (SELECT min(f.id) FROM fetches f WHERE f.check_id = checks.id),
+    count_snapshots = 0, count_failures = 0, count_skipped = 0,
+    count_new = 0, count_vanished = 0, count_retired = 0
+WHERE checks.id = $1
+`
+
+// FinalizeCheck (ADR 0007) works through a Check's Pages in batches by id:
+// each batch is the Pages with ids in (after_id, upto_id], bounded by the
+// page_ids of the Check's Fetches so it holds at most a batch of them.
+// Zeroes the Report counts the batches add up and records the Check's lowest
+// Fetch id (see 00043_finalize_batches.sql).
+func (q *Queries) BeginFinalize(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, beginFinalize, id)
+	return err
+}
+
 const beginPlanning = `-- name: BeginPlanning :exec
 UPDATE checks
 SET state = 'planning', started_at = now(), settings = $2, noise_rules = $3, plan_cursor = 0
@@ -128,20 +181,34 @@ const countOrphans = `-- name: CountOrphans :many
 UPDATE pages pg
 SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
     state = CASE WHEN pg.origin = 'discovered' AND pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
-WHERE pg.state = 'active' AND pg.origin IN ('discovered', 'manual')
-  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = $1 AND f.page_id = pg.id AND f.outcome <> 'failure')
-  AND NOT EXISTS (
-      SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
-      WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id)
-  AND NOT EXISTS (
-      SELECT 1 FROM fetches sf
-      JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
-                    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
-      JOIN links l ON l.snapshot_id = last.id
-      WHERE sf.check_id = $1 AND sf.outcome = 'skipped'
-        AND sf.page_id <> pg.id AND l.target_page_id = pg.id)
+WHERE pg.project_id = $1 AND pg.state = 'active'
+  AND pg.id > $2 AND pg.id <= $3 AND pg.origin IN ('discovered', 'manual')
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = $4 AND f.page_id = pg.id AND f.outcome <> 'failure')
+  AND CASE WHEN EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id >= $5
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        WHERE s.id = l.snapshot_id AND s.check_id = $4 AND s.page_id <> pg.id
+                        OFFSET 0))
+      THEN false
+      ELSE NOT EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id < $5
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        JOIN fetches sf ON sf.check_id = $4 AND sf.page_id = s.page_id AND sf.outcome = 'skipped'
+                        WHERE s.id = l.snapshot_id AND s.page_id <> pg.id
+                          AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.page_id = s.page_id
+                                      ORDER BY s2.fetched_at DESC, s2.id DESC LIMIT 1)
+                        OFFSET 0))
+      END
 RETURNING pg.id, pg.orphan_streak
 `
+
+type CountOrphansParams struct {
+	ProjectID    int64
+	AfterID      int64
+	UptoID       int64
+	CheckID      int64
+	FirstFetchID int64
+}
 
 type CountOrphansRow struct {
 	ID           int64
@@ -149,12 +216,19 @@ type CountOrphansRow struct {
 }
 
 // Orphaned Pages (discovered or manual, active, fetched in the Check without a
-// Fetch failure, linked by no other Page's Snapshot) get their streak raised;
-// the third orphaned Check retires a discovered Page. A manual Page's streak
-// stops at 2: it vanishes but is never retired. The seed Page is never
-// counted. Returns each orphaned Page's new streak.
-func (q *Queries) CountOrphans(ctx context.Context, checkID int64) ([]CountOrphansRow, error) {
-	rows, err := q.db.Query(ctx, countOrphans, checkID)
+// Fetch failure, linked by no other Page's Snapshot, as ResetLinkedOrphanStreaks
+// reads links) get their streak raised; the third orphaned Check retires a
+// discovered Page. A manual Page's streak stops at 2: it vanishes but is never
+// retired. The seed Page is never counted. Returns each orphaned Page's new
+// streak.
+func (q *Queries) CountOrphans(ctx context.Context, arg CountOrphansParams) ([]CountOrphansRow, error) {
+	rows, err := q.db.Query(ctx, countOrphans,
+		arg.ProjectID,
+		arg.AfterID,
+		arg.UptoID,
+		arg.CheckID,
+		arg.FirstFetchID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +295,7 @@ WITH n AS (
 )
 INSERT INTO checks (project_id, trigger, number)
 SELECT $1, $2, n.last_check_number FROM n
-RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor
+RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id
 `
 
 type CreateCheckParams struct {
@@ -259,27 +333,46 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.RobotsFailureKind,
 		&i.Number,
 		&i.PlanCursor,
+		&i.FinalizeCursor,
+		&i.FirstFetchID,
 	)
 	return i, err
 }
 
-const finishCheck = `-- name: FinishCheck :exec
-UPDATE checks
-SET state = $1, finished_at = now(),
-    count_snapshots = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'snapshot'),
-    count_failures = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'failure'),
-    count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
-WHERE checks.id = $2
+const endCheck = `-- name: EndCheck :exec
+UPDATE checks SET state = $1, finished_at = now() WHERE id = $2
 `
 
-type FinishCheckParams struct {
+type EndCheckParams struct {
 	State string
 	ID    int64
 }
 
-func (q *Queries) FinishCheck(ctx context.Context, arg FinishCheckParams) error {
-	_, err := q.db.Exec(ctx, finishCheck, arg.State, arg.ID)
+func (q *Queries) EndCheck(ctx context.Context, arg EndCheckParams) error {
+	_, err := q.db.Exec(ctx, endCheck, arg.State, arg.ID)
 	return err
+}
+
+const finalizeBatchEnd = `-- name: FinalizeBatchEnd :one
+SELECT page_id FROM fetches
+WHERE check_id = $1 AND page_id > $2
+ORDER BY page_id
+OFFSET $3::bigint - 1 LIMIT 1
+`
+
+type FinalizeBatchEndParams struct {
+	CheckID   int64
+	AfterID   int64
+	BatchSize int64
+}
+
+// The page_id of the Check's batch_size-th Fetch after after_id, by page_id;
+// no row when fewer are left, and the batch is the last one.
+func (q *Queries) FinalizeBatchEnd(ctx context.Context, arg FinalizeBatchEndParams) (int64, error) {
+	row := q.db.QueryRow(ctx, finalizeBatchEnd, arg.CheckID, arg.AfterID, arg.BatchSize)
+	var page_id int64
+	err := row.Scan(&page_id)
+	return page_id, err
 }
 
 const finishFetchFailure = `-- name: FinishFetchFailure :exec
@@ -334,7 +427,7 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks
 WHERE project_id = $1 AND state IN ('queued', 'planning', 'running', 'cancelling')
 `
 
@@ -365,12 +458,14 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.RobotsFailureKind,
 		&i.Number,
 		&i.PlanCursor,
+		&i.FinalizeCursor,
+		&i.FirstFetchID,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -400,12 +495,14 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsFailureKind,
 		&i.Number,
 		&i.PlanCursor,
+		&i.FinalizeCursor,
+		&i.FirstFetchID,
 	)
 	return i, err
 }
 
 const getCheckByNumber = `-- name: GetCheckByNumber :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE project_id = $1 AND number = $2
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE project_id = $1 AND number = $2
 `
 
 type GetCheckByNumberParams struct {
@@ -440,6 +537,8 @@ func (q *Queries) GetCheckByNumber(ctx context.Context, arg GetCheckByNumberPara
 		&i.RobotsFailureKind,
 		&i.Number,
 		&i.PlanCursor,
+		&i.FinalizeCursor,
+		&i.FirstFetchID,
 	)
 	return i, err
 }
@@ -556,17 +655,24 @@ func (q *Queries) InsertLinks(ctx context.Context, arg InsertLinksParams) error 
 
 const insertNewPageEvents = `-- name: InsertNewPageEvents :exec
 INSERT INTO page_events (check_id, page_id, kind)
-SELECT $1, s.page_id, 'new'
-FROM snapshots s JOIN pages pg ON pg.id = s.page_id
-WHERE s.check_id = $1 AND pg.origin <> 'seed'
-  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = s.page_id AND o.check_id < s.check_id)
+SELECT $1, f.page_id, 'new'
+FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = $1 AND f.page_id > $2 AND f.page_id <= $3
+  AND f.outcome = 'snapshot' AND pg.origin <> 'seed'
+  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = f.page_id AND o.check_id < $1)
 ON CONFLICT DO NOTHING
 `
 
+type InsertNewPageEventsParams struct {
+	CheckID int64
+	AfterID int64
+	UptoID  int64
+}
+
 // `new`: a Page that got its first Snapshot in this Check (the seed Page is
 // the Project's starting point, not a find).
-func (q *Queries) InsertNewPageEvents(ctx context.Context, checkID int64) error {
-	_, err := q.db.Exec(ctx, insertNewPageEvents, checkID)
+func (q *Queries) InsertNewPageEvents(ctx context.Context, arg InsertNewPageEventsParams) error {
+	_, err := q.db.Exec(ctx, insertNewPageEvents, arg.CheckID, arg.AfterID, arg.UptoID)
 	return err
 }
 
@@ -589,13 +695,22 @@ func (q *Queries) InsertPageEvents(ctx context.Context, arg InsertPageEventsPara
 
 const insertReactivatedPageEvents = `-- name: InsertReactivatedPageEvents :exec
 INSERT INTO page_events (check_id, page_id, kind)
-SELECT $1, pg.id, 'reactivated' FROM pages pg
-WHERE pg.reactivated_check_id = $1
+SELECT $1, pg.id, 'reactivated'
+FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = $1 AND f.page_id > $2 AND f.page_id <= $3
+  AND pg.reactivated_check_id = $1
 ON CONFLICT DO NOTHING
 `
 
-func (q *Queries) InsertReactivatedPageEvents(ctx context.Context, checkID int64) error {
-	_, err := q.db.Exec(ctx, insertReactivatedPageEvents, checkID)
+type InsertReactivatedPageEventsParams struct {
+	CheckID int64
+	AfterID int64
+	UptoID  int64
+}
+
+// A Page discovery brought back in this Check always got a Fetch in it.
+func (q *Queries) InsertReactivatedPageEvents(ctx context.Context, arg InsertReactivatedPageEventsParams) error {
+	_, err := q.db.Exec(ctx, insertReactivatedPageEvents, arg.CheckID, arg.AfterID, arg.UptoID)
 	return err
 }
 
@@ -630,7 +745,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor, c.finalize_cursor, c.first_fetch_id,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
@@ -677,6 +792,8 @@ type ListCheckRowsRow struct {
 	RobotsFailureKind     pgtype.Text
 	Number                int64
 	PlanCursor            int64
+	FinalizeCursor        pgtype.Int8
+	FirstFetchID          pgtype.Int8
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -721,6 +838,8 @@ func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([
 			&i.RobotsFailureKind,
 			&i.Number,
 			&i.PlanCursor,
+			&i.FinalizeCursor,
+			&i.FirstFetchID,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -998,7 +1117,7 @@ func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetches
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -1028,6 +1147,8 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsFailureKind,
 		&i.Number,
 		&i.PlanCursor,
+		&i.FinalizeCursor,
+		&i.FirstFetchID,
 	)
 	return i, err
 }
@@ -1158,12 +1279,13 @@ const requestCancel = `-- name: RequestCancel :execrows
 UPDATE checks
 SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
     finished_at = CASE WHEN state = 'queued' THEN now() END
-WHERE id = $1 AND state IN ('queued', 'planning', 'running')
+WHERE id = $1 AND state IN ('queued', 'planning', 'running') AND finalize_cursor IS NULL
 `
 
 // A queued Check has nothing to wind down and is cancelled at once. A planning
 // one becomes `cancelling` and stops planning; a running one becomes
-// `cancelling` and its lanes stop claiming Fetches.
+// `cancelling` and its lanes stop claiming Fetches. Once FinalizeCheck has
+// begun (ADR 0007) every Fetch is done and the Check can't be cancelled.
 func (q *Queries) RequestCancel(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, requestCancel, id)
 	if err != nil {
@@ -1174,24 +1296,48 @@ func (q *Queries) RequestCancel(ctx context.Context, id int64) (int64, error) {
 
 const resetLinkedOrphanStreaks = `-- name: ResetLinkedOrphanStreaks :exec
 UPDATE pages pg SET orphan_streak = 0
-WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND (
-    EXISTS (
-        SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
-        WHERE s.check_id = $1 AND l.target_page_id = pg.id AND s.page_id <> pg.id)
-    OR EXISTS (
-        SELECT 1 FROM fetches sf
-        JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
-                      ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
-        JOIN links l ON l.snapshot_id = last.id
-        WHERE sf.check_id = $1 AND sf.outcome = 'skipped'
-          AND sf.page_id <> pg.id AND l.target_page_id = pg.id))
+WHERE pg.project_id = $1 AND pg.state = 'active'
+  AND pg.id > $2 AND pg.id <= $3 AND pg.orphan_streak > 0
+  AND CASE WHEN EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id >= $4
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        WHERE s.id = l.snapshot_id AND s.check_id = $5 AND s.page_id <> pg.id
+                        OFFSET 0))
+      THEN true
+      ELSE EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id < $4
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        JOIN fetches sf ON sf.check_id = $5 AND sf.page_id = s.page_id AND sf.outcome = 'skipped'
+                        WHERE s.id = l.snapshot_id AND s.page_id <> pg.id
+                          AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.page_id = s.page_id
+                                      ORDER BY s2.fetched_at DESC, s2.id DESC LIMIT 1)
+                        OFFSET 0))
+      END
 `
+
+type ResetLinkedOrphanStreaksParams struct {
+	ProjectID    int64
+	AfterID      int64
+	UptoID       int64
+	FirstFetchID int64
+	CheckID      int64
+}
 
 // Pages some other Page's Snapshot in the Check linked to are not orphaned. A
 // Page skipped in the Check sent no request, so its links come from its latest
-// earlier Snapshot.
-func (q *Queries) ResetLinkedOrphanStreaks(ctx context.Context, checkID int64) error {
-	_, err := q.db.Exec(ctx, resetLinkedOrphanStreaks, checkID)
+// earlier Snapshot. Each Page's links are read through
+// links_target_snapshot_idx: from the Check's own Snapshots (ids from
+// first_fetch_id on), then, only if none, from earlier ones. The CASE and the
+// OFFSET 0 keep the planner from turning the lookups into joins over all the
+// Check's links (4.7 s instead of 38 ms per batch of 10,000 Pages).
+func (q *Queries) ResetLinkedOrphanStreaks(ctx context.Context, arg ResetLinkedOrphanStreaksParams) error {
+	_, err := q.db.Exec(ctx, resetLinkedOrphanStreaks,
+		arg.ProjectID,
+		arg.AfterID,
+		arg.UptoID,
+		arg.FirstFetchID,
+		arg.CheckID,
+	)
 	return err
 }
 
@@ -1219,19 +1365,6 @@ type SetCheckCreatedAtParams struct {
 
 func (q *Queries) SetCheckCreatedAt(ctx context.Context, arg SetCheckCreatedAtParams) error {
 	_, err := q.db.Exec(ctx, setCheckCreatedAt, arg.ID, arg.CreatedAt)
-	return err
-}
-
-const setCheckEventCounts = `-- name: SetCheckEventCounts :exec
-UPDATE checks SET
-    count_new = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind IN ('new', 'reactivated')),
-    count_vanished = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'vanished'),
-    count_retired = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'retired')
-WHERE id = $1
-`
-
-func (q *Queries) SetCheckEventCounts(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, setCheckEventCounts, id)
 	return err
 }
 
@@ -1304,11 +1437,18 @@ func (q *Queries) SetPlanCursor(ctx context.Context, arg SetPlanCursorParams) er
 
 const skipPendingFetches = `-- name: SkipPendingFetches :exec
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
-WHERE check_id = $1 AND state = 'pending'
+WHERE check_id = $1 AND page_id > $2 AND page_id <= $3
+  AND state = 'pending'
 `
 
-func (q *Queries) SkipPendingFetches(ctx context.Context, checkID int64) error {
-	_, err := q.db.Exec(ctx, skipPendingFetches, checkID)
+type SkipPendingFetchesParams struct {
+	CheckID int64
+	AfterID int64
+	UptoID  int64
+}
+
+func (q *Queries) SkipPendingFetches(ctx context.Context, arg SkipPendingFetchesParams) error {
+	_, err := q.db.Exec(ctx, skipPendingFetches, arg.CheckID, arg.AfterID, arg.UptoID)
 	return err
 }
 

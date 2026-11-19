@@ -91,6 +91,8 @@ type Check struct {
 	RobotsFailureKind     pgtype.Text
 	Number                int64
 	PlanCursor            int64
+	FinalizeCursor        pgtype.Int8
+	FirstFetchID          pgtype.Int8
 }
 
 type Diff struct {

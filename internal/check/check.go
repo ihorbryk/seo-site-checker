@@ -108,10 +108,14 @@ func (LaneArgs) Kind() string { return "lane" }
 
 func (LaneArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 3} }
 
-// FinalizeCheckArgs finishes a Check once its last lane ended. It is unique
-// per Check.
+// FinalizeCheckArgs finishes a Check once its last lane ended, one batch of
+// Pages at a time (ADR 0007). The first job (AfterPageID 0) is unique per
+// Check; each later one finalizes the Pages after AfterPageID, which must
+// still be the Check's finalize cursor, so a duplicate or stale job does
+// nothing.
 type FinalizeCheckArgs struct {
-	CheckID int64 `json:"check_id"`
+	CheckID     int64 `json:"check_id"`
+	AfterPageID int64 `json:"after_page_id,omitempty"`
 }
 
 func (FinalizeCheckArgs) Kind() string { return "finalize_check" }

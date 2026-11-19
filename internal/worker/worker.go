@@ -28,14 +28,18 @@ type Options struct {
 	// PlanBatchSize is how many Pages a StartCheck job plans. Defaults to
 	// DefaultPlanBatchSize (tests lower it).
 	PlanBatchSize int
+	// FinalizeBatchSize is how many of a Check's Pages a FinalizeCheck job
+	// finalizes. Defaults to DefaultFinalizeBatchSize (tests lower it).
+	FinalizeBatchSize int
 }
 
 type deps struct {
-	pool          *pgxpool.Pool
-	q             *dbgen.Queries
-	client        *http.Client
-	log           *slog.Logger
-	planBatchSize int // 0 means DefaultPlanBatchSize
+	pool              *pgxpool.Pool
+	q                 *dbgen.Queries
+	client            *http.Client
+	log               *slog.Logger
+	planBatchSize     int // 0 means DefaultPlanBatchSize
+	finalizeBatchSize int // 0 means DefaultFinalizeBatchSize
 }
 
 // rescueStuckJobsAfter is River's stuck-job delay (ADR 0003). Every job
@@ -52,7 +56,8 @@ func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) 
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log, planBatchSize: opts.PlanBatchSize}
+	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log, planBatchSize: opts.PlanBatchSize,
+		finalizeBatchSize: opts.FinalizeBatchSize}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &startWorker{deps: d})
@@ -62,7 +67,7 @@ func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) 
 		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: opts.Concurrency}},
 		Workers: workers,
 		Logger:  opts.Log,
-		// ADR 0003: above the lane timeout (fetch timeout + 30 s) and startTimeout.
+		// ADR 0003: above the lane timeout (fetch timeout + 30 s), startTimeout and finalizeTimeout.
 		RescueStuckJobsAfter: rescueStuckJobsAfter,
 		FetchPollInterval:    opts.FetchPollInterval,
 		FetchCooldown:        opts.FetchPollInterval,
