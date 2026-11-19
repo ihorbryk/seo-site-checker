@@ -17,4 +17,4 @@ Now StartCheck plans one batch of Pages per job (`worker.DefaultPlanBatchSize`, 
 - Planning is no longer one snapshot of the pool. A Page added or ignored during planning is planned if its id is beyond the cursor and it is active when its batch is read.
 - StartCheck has its own timeout (3 min: a robots.txt fetch of up to 120 s plus one batch), kept below `rescueStuckJobsAfter`.
 - `fetches_pending_check_id_idx (check_id, id) WHERE state = 'pending'` replaces the index on `check_id` alone. A lane's claim of the lowest pending Fetch then reads one index entry instead of walking the Check's done Fetches: 213 ms before and 1 ms after, halfway through a 2M-Fetch Check. `pages_project_state_id_idx` serves the batch reads.
-- FinalizeCheck still runs as one job and one transaction, and so do several web pages' aggregates. They are the next limits for a pool of this size, and they are tracked separately.
+- FinalizeCheck still runs as one job and one transaction, and so do several web pages' aggregates. They are the next limits for a pool of this size (#70, #71).
