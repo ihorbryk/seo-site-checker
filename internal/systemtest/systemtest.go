@@ -59,8 +59,9 @@ type System struct {
 type Option func(*settings)
 
 type settings struct {
-	web     web.Options
-	capture bool
+	web           web.Options
+	capture       bool
+	planBatchSize int
 }
 
 // logBuffer is a goroutine-safe io.Writer holding the web app's log.
@@ -78,6 +79,12 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 // InsecureCookies starts the web app with INSECURE_COOKIES=true.
 func InsecureCookies() Option {
 	return func(o *settings) { o.web.InsecureCookies = true }
+}
+
+// PlanBatchSize makes the worker's StartCheck jobs plan n Pages each, so a
+// small pool takes several batches.
+func PlanBatchSize(n int) Option {
+	return func(o *settings) { o.planBatchSize = n }
 }
 
 // TrustedProxyHeader starts the web app with TRUSTED_PROXY_HEADER=header.
@@ -147,6 +154,7 @@ func New(t testing.TB, opts ...Option) *System {
 		Log:               log,
 		HTTPClient:        s.Network.Client(),
 		FetchPollInterval: 50 * time.Millisecond,
+		PlanBatchSize:     cfg.planBatchSize,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -90,6 +90,7 @@ type Check struct {
 	RobotsFetchedAt       pgtype.Timestamptz
 	RobotsFailureKind     pgtype.Text
 	Number                int64
+	PlanCursor            int64
 }
 
 type Diff struct {

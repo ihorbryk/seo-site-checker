@@ -25,14 +25,23 @@ type Options struct {
 	HTTPClient *http.Client
 	// FetchPollInterval overrides River's job polling interval (tests lower it).
 	FetchPollInterval time.Duration
+	// PlanBatchSize is how many Pages a StartCheck job plans. Defaults to
+	// DefaultPlanBatchSize (tests lower it).
+	PlanBatchSize int
 }
 
 type deps struct {
-	pool   *pgxpool.Pool
-	q      *dbgen.Queries
-	client *http.Client
-	log    *slog.Logger
+	pool          *pgxpool.Pool
+	q             *dbgen.Queries
+	client        *http.Client
+	log           *slog.Logger
+	planBatchSize int // 0 means DefaultPlanBatchSize
 }
+
+// rescueStuckJobsAfter is River's stuck-job delay (ADR 0003). Every job
+// timeout must stay below it, or the rescuer starts a duplicate of a job that
+// is still running.
+const rescueStuckJobsAfter = 5 * time.Minute
 
 // NewClient returns a River client working the default queue. The caller
 // starts and stops it.
@@ -43,7 +52,7 @@ func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) 
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log}
+	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log, planBatchSize: opts.PlanBatchSize}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &startWorker{deps: d})
@@ -53,8 +62,8 @@ func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) 
 		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: opts.Concurrency}},
 		Workers: workers,
 		Logger:  opts.Log,
-		// ADR 0003: above the lane timeout (fetch timeout + 30 s).
-		RescueStuckJobsAfter: 5 * time.Minute,
+		// ADR 0003: above the lane timeout (fetch timeout + 30 s) and startTimeout.
+		RescueStuckJobsAfter: rescueStuckJobsAfter,
 		FetchPollInterval:    opts.FetchPollInterval,
 		FetchCooldown:        opts.FetchPollInterval,
 	})

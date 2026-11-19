@@ -24,7 +24,7 @@
 
 {{define "progress"}}
 <div id="progress" hx-get="{{.Path}}/progress" hx-trigger="every 2s" hx-swap="outerHTML" class="card card-border bg-base-100"><div class="card-body gap-3 p-4">
-{{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
+{{if .Queued}}<p>Queued, waiting for the worker…</p>{{else if .Planning}}<p class="planning">Planning: <b class="known">{{.Known}}</b> Pages to fetch so far…</p>{{else if .Finalizing}}<p>Finalizing…</p>{{else}}
 <progress class="progress progress-info w-full" value="{{.Fetched}}" max="{{.Known}}"></progress>
 <p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed, <b class="discovered">{{.Discovered}}</b> newly discovered.</p>
 {{end}}

@@ -22,15 +22,25 @@ SELECT * FROM checks WHERE id = $1 FOR UPDATE;
 
 -- name: GetActiveCheck :one
 SELECT * FROM checks
-WHERE project_id = $1 AND state IN ('queued', 'running', 'cancelling');
+WHERE project_id = $1 AND state IN ('queued', 'planning', 'running', 'cancelling');
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = $1;
 
--- name: MarkCheckRunning :exec
+-- name: BeginPlanning :exec
+-- Starts a queued Check: it freezes the Request settings and Noise rules and
+-- plans its Fetches from the first Page on (ADR 0006).
 UPDATE checks
-SET state = 'running', started_at = now(), settings = $2, noise_rules = $3, lanes = $4
+SET state = 'planning', started_at = now(), settings = $2, noise_rules = $3, plan_cursor = 0
 WHERE id = $1;
+
+-- name: ListPlanBatch :many
+-- The next batch of a Project's active Pages to plan, in id order after the
+-- cursor (pages_project_state_id_idx).
+SELECT id, url, origin FROM pages
+WHERE project_id = sqlc.arg(project_id) AND state = 'active' AND id > sqlc.arg(after_id)
+ORDER BY id
+LIMIT sqlc.arg(batch_size);
 
 -- name: PlanFetches :execrows
 INSERT INTO fetches (check_id, page_id)
@@ -38,6 +48,13 @@ SELECT sqlc.arg(check_id), pg.id FROM pages pg
 WHERE pg.project_id = sqlc.arg(project_id) AND pg.state = 'active'
   AND pg.id = ANY(sqlc.arg(page_ids)::bigint[])
 ORDER BY pg.id;
+
+-- name: SetPlanCursor :exec
+UPDATE checks SET plan_cursor = $2 WHERE id = $1;
+
+-- name: MarkCheckRunning :exec
+-- Ends planning: the Check runs `lanes` lanes.
+UPDATE checks SET state = 'running', lanes = $2 WHERE id = $1;
 
 -- name: ClaimNextFetch :one
 -- Claims one pending Fetch for the lane job, skipping rows other lanes hold.
@@ -88,12 +105,13 @@ SET state = sqlc.arg(state), finished_at = now(),
 WHERE checks.id = sqlc.arg(id);
 
 -- name: RequestCancel :execrows
--- A queued Check has nothing to wind down and is cancelled at once; a running
--- one becomes `cancelling` and its lanes stop claiming Fetches.
+-- A queued Check has nothing to wind down and is cancelled at once. A planning
+-- one becomes `cancelling` and stops planning; a running one becomes
+-- `cancelling` and its lanes stop claiming Fetches.
 UPDATE checks
 SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
     finished_at = CASE WHEN state = 'queued' THEN now() END
-WHERE id = $1 AND state IN ('queued', 'running');
+WHERE id = $1 AND state IN ('queued', 'planning', 'running');
 
 -- name: SkipPendingFetches :exec
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
@@ -303,7 +321,7 @@ SELECT p.id FROM projects p
 WHERE p.schedule <> 'manual'
   AND NOT EXISTS (
       SELECT 1 FROM checks a
-      WHERE a.project_id = p.id AND a.state IN ('queued', 'running', 'cancelling'))
+      WHERE a.project_id = p.id AND a.state IN ('queued', 'planning', 'running', 'cancelling'))
   AND COALESCE(
       (SELECT max(c.created_at) FROM checks c WHERE c.project_id = p.id AND c.trigger = 'scheduled')
           + CASE p.schedule

@@ -230,6 +230,7 @@ func (s *server) progressFragment(w http.ResponseWriter, r *http.Request) {
 type progressView struct {
 	Path       string // the Check's URL
 	Queued     bool
+	Planning   bool
 	Finalizing bool
 	Cancelling bool
 	Fetched    int64
@@ -253,7 +254,7 @@ func (s *server) loadProgress(r *http.Request, c dbgen.Check) (progressView, err
 		return progressView{}, err
 	}
 	return progressView{
-		Path: checkPath(c.ProjectID, c.Number), Queued: c.State == check.StateQueued, Cancelling: c.State == check.StateCancelling,
+		Path: checkPath(c.ProjectID, c.Number), Queued: c.State == check.StateQueued, Planning: c.State == check.StatePlanning, Cancelling: c.State == check.StateCancelling,
 		Finalizing: c.State == check.StateRunning && p.Fetched == p.Known,
 		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, Discovered: discovered, InFlight: inflight,
 	}, nil
