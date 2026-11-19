@@ -17,6 +17,14 @@ CREATE UNIQUE INDEX checks_one_active_idx ON checks (project_id)
 -- is still queued, and the old worker ignores its after_page_id.
 DELETE FROM fetches WHERE check_id IN (SELECT id FROM checks WHERE state = 'planning');
 UPDATE checks SET state = 'queued', started_at = NULL WHERE state = 'planning';
+-- A Check cancelled while planning (cancelling, no lanes) waits for its next
+-- StartCheck job to finalize it, which the old worker would never do: end it
+-- here, its planned Fetches skipped, as FinalizeCheck would.
+UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
+WHERE state = 'pending' AND check_id IN (SELECT id FROM checks WHERE state = 'cancelling' AND lanes = 0);
+UPDATE checks SET state = 'cancelled', finished_at = now(),
+    count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
+WHERE state = 'cancelling' AND lanes = 0;
 
 DROP INDEX checks_one_active_idx;
 CREATE UNIQUE INDEX checks_one_active_idx ON checks (project_id)
