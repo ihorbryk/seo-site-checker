@@ -52,6 +52,10 @@ _Avoid_: Deleted page, excluded page (exclusion comes from exclude patterns, not
 One pass over a Project's Page pool, started by its schedule or manually. A Project has at most one active Check at a time. A Check ends finished, or cancelled by the user, which leaves it partial.
 _Avoid_: Run, crawl, scan, job
 
+**Planning**:
+The start of a Check, before its lanes run: it creates one pending Fetch for each active Page in the Page pool that no exclude pattern matches, a batch of Pages at a time. A Check cancelled while planning ends cancelled, with the Fetches planned so far skipped.
+_Avoid_: Queueing, scheduling (the schedule decides when a Check is created)
+
 **Check number**:
 A Check's position among its Project's Checks, counting from 1 in the order they were created, shown as "Check #n". Every Check takes one, including cancelled ones, and a number is never reused.
 

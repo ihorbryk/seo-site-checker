@@ -14,3 +14,4 @@ Each River job that executes a Check is a **lane**. A lane claims one pending Fe
 - River's stuck-job delay is set to about 5 min, above the lane timeout (the Check's fetch timeout + 30s), so a crashed Check resumes within minutes of a worker returning.
 - A lane that ends and a Fetch that adds work race on the Check row, so the counter must only change under that row lock.
 - A delay between requests to the same host, if fetch policy wants one, is added by scheduling the lane's next job later.
+- The Fetches a lane claims are planned before the lanes start, in batches across several StartCheck jobs (ADR 0006).

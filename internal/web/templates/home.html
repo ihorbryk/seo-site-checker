@@ -6,7 +6,7 @@
 
 {{range .Projects}}<tr>
 <td><a href="/p/{{.ID}}" class="font-semibold">{{.Domain}}</a></td><td>{{.Schedule}}</td><td class="active-pages">{{.ActivePages}} active</td>
-<td class="last-check">{{if .LastCheckNumber}}<a href="/p/{{.ID}}/c/{{.LastCheckNumber}}">#{{.LastCheckNumber}}</a> {{template "checkState" .LastCheckState}}{{if or (eq .LastCheckState "queued") (eq .LastCheckState "running") (eq .LastCheckState "cancelling")}} {{template "live"}}{{end}}{{else}}<span class="text-base-content/60">never</span>{{end}}</td>
+<td class="last-check">{{if .LastCheckNumber}}<a href="/p/{{.ID}}/c/{{.LastCheckNumber}}">#{{.LastCheckNumber}}</a> {{template "checkState" .LastCheckState}}{{if or (eq .LastCheckState "queued") (eq .LastCheckState "planning") (eq .LastCheckState "running") (eq .LastCheckState "cancelling")}} {{template "live"}}{{end}}{{else}}<span class="text-base-content/60">never</span>{{end}}</td>
 <td>{{if .ReportCheckNumber}}<a href="/p/{{.ID}}/c/{{.ReportCheckNumber}}">#{{.ReportCheckNumber}}</a>:
 <b class="r-changed">{{.ReportChanged}}</b> changed, <b class="r-critical {{if .ReportCritical}}text-error{{end}}">{{.ReportCritical}}</b> critical, <b class="r-seo {{if .ReportSeo}}text-warning{{end}}">{{.ReportSeo}}</b> SEO,
 <b class="r-failed {{if .ReportFailed}}text-error{{end}}">{{.ReportFailed}}</b> failed, <b class="r-seed-failed">{{if .ReportSeedFailed}}1{{else}}0{{end}}</b> seed failed{{else}}<span class="text-base-content/60">—</span>{{end}}</td>

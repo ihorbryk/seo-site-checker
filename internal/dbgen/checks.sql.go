@@ -12,6 +12,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const beginPlanning = `-- name: BeginPlanning :exec
+UPDATE checks
+SET state = 'planning', started_at = now(), settings = $2, noise_rules = $3, plan_cursor = 0
+WHERE id = $1
+`
+
+type BeginPlanningParams struct {
+	ID         int64
+	Settings   []byte
+	NoiseRules []byte
+}
+
+// Starts a queued Check: it freezes the Request settings and Noise rules and
+// plans its Fetches from the first Page on (ADR 0006).
+func (q *Queries) BeginPlanning(ctx context.Context, arg BeginPlanningParams) error {
+	_, err := q.db.Exec(ctx, beginPlanning, arg.ID, arg.Settings, arg.NoiseRules)
+	return err
+}
+
 const checkProgress = `-- name: CheckProgress :one
 SELECT
     count(*)::bigint AS known,
@@ -202,7 +221,7 @@ WITH n AS (
 )
 INSERT INTO checks (project_id, trigger, number)
 SELECT $1, $2, n.last_check_number FROM n
-RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number
+RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor
 `
 
 type CreateCheckParams struct {
@@ -239,6 +258,7 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
 		&i.Number,
+		&i.PlanCursor,
 	)
 	return i, err
 }
@@ -314,8 +334,8 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks
-WHERE project_id = $1 AND state IN ('queued', 'running', 'cancelling')
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks
+WHERE project_id = $1 AND state IN ('queued', 'planning', 'running', 'cancelling')
 `
 
 func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, error) {
@@ -344,12 +364,13 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
 		&i.Number,
+		&i.PlanCursor,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -378,12 +399,13 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
 		&i.Number,
+		&i.PlanCursor,
 	)
 	return i, err
 }
 
 const getCheckByNumber = `-- name: GetCheckByNumber :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE project_id = $1 AND number = $2
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE project_id = $1 AND number = $2
 `
 
 type GetCheckByNumberParams struct {
@@ -417,6 +439,7 @@ func (q *Queries) GetCheckByNumber(ctx context.Context, arg GetCheckByNumberPara
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
 		&i.Number,
+		&i.PlanCursor,
 	)
 	return i, err
 }
@@ -607,7 +630,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
     (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
@@ -653,6 +676,7 @@ type ListCheckRowsRow struct {
 	RobotsFetchedAt       pgtype.Timestamptz
 	RobotsFailureKind     pgtype.Text
 	Number                int64
+	PlanCursor            int64
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -696,6 +720,7 @@ func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([
 			&i.RobotsFetchedAt,
 			&i.RobotsFailureKind,
 			&i.Number,
+			&i.PlanCursor,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -719,7 +744,7 @@ SELECT p.id FROM projects p
 WHERE p.schedule <> 'manual'
   AND NOT EXISTS (
       SELECT 1 FROM checks a
-      WHERE a.project_id = p.id AND a.state IN ('queued', 'running', 'cancelling'))
+      WHERE a.project_id = p.id AND a.state IN ('queued', 'planning', 'running', 'cancelling'))
   AND COALESCE(
       (SELECT max(c.created_at) FROM checks c WHERE c.project_id = p.id AND c.trigger = 'scheduled')
           + CASE p.schedule
@@ -892,6 +917,47 @@ func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) 
 	return items, nil
 }
 
+const listPlanBatch = `-- name: ListPlanBatch :many
+SELECT id, url, origin FROM pages
+WHERE project_id = $1 AND state = 'active' AND id > $2
+ORDER BY id
+LIMIT $3
+`
+
+type ListPlanBatchParams struct {
+	ProjectID int64
+	AfterID   int64
+	BatchSize int32
+}
+
+type ListPlanBatchRow struct {
+	ID     int64
+	Url    string
+	Origin string
+}
+
+// The next batch of a Project's active Pages to plan, in id order after the
+// cursor (pages_project_state_id_idx).
+func (q *Queries) ListPlanBatch(ctx context.Context, arg ListPlanBatchParams) ([]ListPlanBatchRow, error) {
+	rows, err := q.db.Query(ctx, listPlanBatch, arg.ProjectID, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPlanBatchRow
+	for rows.Next() {
+		var i ListPlanBatchRow
+		if err := rows.Scan(&i.ID, &i.Url, &i.Origin); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSkippedFetches = `-- name: ListSkippedFetches :many
 SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.outcome = 'skipped'
@@ -932,7 +998,7 @@ func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetches
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -961,30 +1027,23 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.RobotsFetchedAt,
 		&i.RobotsFailureKind,
 		&i.Number,
+		&i.PlanCursor,
 	)
 	return i, err
 }
 
 const markCheckRunning = `-- name: MarkCheckRunning :exec
-UPDATE checks
-SET state = 'running', started_at = now(), settings = $2, noise_rules = $3, lanes = $4
-WHERE id = $1
+UPDATE checks SET state = 'running', lanes = $2 WHERE id = $1
 `
 
 type MarkCheckRunningParams struct {
-	ID         int64
-	Settings   []byte
-	NoiseRules []byte
-	Lanes      int32
+	ID    int64
+	Lanes int32
 }
 
+// Ends planning: the Check runs `lanes` lanes.
 func (q *Queries) MarkCheckRunning(ctx context.Context, arg MarkCheckRunningParams) error {
-	_, err := q.db.Exec(ctx, markCheckRunning,
-		arg.ID,
-		arg.Settings,
-		arg.NoiseRules,
-		arg.Lanes,
-	)
+	_, err := q.db.Exec(ctx, markCheckRunning, arg.ID, arg.Lanes)
 	return err
 }
 
@@ -1099,11 +1158,12 @@ const requestCancel = `-- name: RequestCancel :execrows
 UPDATE checks
 SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
     finished_at = CASE WHEN state = 'queued' THEN now() END
-WHERE id = $1 AND state IN ('queued', 'running')
+WHERE id = $1 AND state IN ('queued', 'planning', 'running')
 `
 
-// A queued Check has nothing to wind down and is cancelled at once; a running
-// one becomes `cancelling` and its lanes stop claiming Fetches.
+// A queued Check has nothing to wind down and is cancelled at once. A planning
+// one becomes `cancelling` and stops planning; a running one becomes
+// `cancelling` and its lanes stop claiming Fetches.
 func (q *Queries) RequestCancel(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, requestCancel, id)
 	if err != nil {
@@ -1225,6 +1285,20 @@ type SetFetchJobParams struct {
 
 func (q *Queries) SetFetchJob(ctx context.Context, arg SetFetchJobParams) error {
 	_, err := q.db.Exec(ctx, setFetchJob, arg.ID, arg.JobID)
+	return err
+}
+
+const setPlanCursor = `-- name: SetPlanCursor :exec
+UPDATE checks SET plan_cursor = $2 WHERE id = $1
+`
+
+type SetPlanCursorParams struct {
+	ID         int64
+	PlanCursor int64
+}
+
+func (q *Queries) SetPlanCursor(ctx context.Context, arg SetPlanCursorParams) error {
+	_, err := q.db.Exec(ctx, setPlanCursor, arg.ID, arg.PlanCursor)
 	return err
 }
 

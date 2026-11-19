@@ -25,6 +25,6 @@ document.addEventListener("htmx:beforeSwap", function (e) {
 
 {{define "live"}}<span class="live loading loading-ring loading-xs text-info align-middle"></span>{{end}}
 
-{{define "checkState"}}<span class="badge badge-sm {{if eq . "finished"}}badge-success{{else if eq . "cancelled"}}badge-warning{{else if or (eq . "queued") (eq . "running") (eq . "cancelling")}}badge-info{{else}}badge-ghost{{end}}">{{.}}</span>{{end}}
+{{define "checkState"}}<span class="badge badge-sm {{if eq . "finished"}}badge-success{{else if eq . "cancelled"}}badge-warning{{else if or (eq . "queued") (eq . "planning") (eq . "running") (eq . "cancelling")}}badge-info{{else}}badge-ghost{{end}}">{{.}}</span>{{end}}
 
 {{define "tierBadge"}}<span class="badge badge-sm tier tier-{{.}} {{if eq . "critical"}}badge-error{{else if eq . "seo"}}badge-warning{{else}}badge-ghost{{end}}">{{.}}</span>{{end}}

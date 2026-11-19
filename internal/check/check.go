@@ -23,15 +23,17 @@ const (
 	TriggerScheduled = "scheduled"
 
 	StateQueued     = "queued"
+	StatePlanning   = "planning"
 	StateRunning    = "running"
 	StateCancelling = "cancelling"
 	StateFinished   = "finished"
 	StateCancelled  = "cancelled"
 )
 
-// Active reports whether a Check in state is queued, running or cancelling.
+// Active reports whether a Check in state is queued, planning, running or
+// cancelling.
 func Active(state string) bool {
-	return state == StateQueued || state == StateRunning || state == StateCancelling
+	return state == StateQueued || state == StatePlanning || state == StateRunning || state == StateCancelling
 }
 
 // RobotsUnreachable reports whether the robots.txt a Check stored (status 0
@@ -82,9 +84,13 @@ func ParseSettings(raw []byte) (Settings, error) {
 	return s, err
 }
 
-// StartCheckArgs turns a queued Check into a running one.
+// StartCheckArgs turns a queued Check into a running one, one batch of Pages
+// at a time (ADR 0006). The first job finds the Check queued and AfterPageID
+// 0; each later one plans the Pages after AfterPageID, which must still be the
+// Check's plan_cursor, so a duplicate or stale job does nothing.
 type StartCheckArgs struct {
-	CheckID int64 `json:"check_id"`
+	CheckID     int64 `json:"check_id"`
+	AfterPageID int64 `json:"after_page_id,omitempty"`
 }
 
 func (StartCheckArgs) Kind() string { return "start_check" }

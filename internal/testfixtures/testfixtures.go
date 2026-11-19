@@ -117,7 +117,7 @@ type checkParams struct {
 	createdAt time.Time
 }
 
-// WithCheckState sets the Check's state (queued, running, cancelling,
+// WithCheckState sets the Check's state (queued, planning, running, cancelling,
 // finished, cancelled). A Check past queued gets started_at, and an ended one
 // finished_at, both at its creation time.
 func WithCheckState(state string) CheckOption {
