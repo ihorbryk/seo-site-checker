@@ -376,7 +376,9 @@ WHERE f.check_id = sqlc.arg(check_id) AND f.page_id > sqlc.arg(after_id) AND f.p
 ON CONFLICT DO NOTHING;
 
 -- name: InsertReactivatedPageEvents :exec
--- A Page discovery brought back in this Check always got a Fetch in it.
+-- A Page discovery brought back in this Check always got a Fetch in it:
+-- addLinkedPages reactivates linked Pages and then plans a Fetch for each of
+-- them, in the same transaction.
 INSERT INTO page_events (check_id, page_id, kind)
 SELECT sqlc.arg(check_id), pg.id, 'reactivated'
 FROM fetches f JOIN pages pg ON pg.id = f.page_id

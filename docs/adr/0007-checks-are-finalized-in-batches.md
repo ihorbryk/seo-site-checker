@@ -36,3 +36,7 @@ A `CASE` and `OFFSET 0` keep the planner from turning these lookups into a hash 
 - The Report counts are summed batch by batch instead of counted at the end.
 - FinalizeCheck has its own 3-minute timeout, below `rescueStuckJobsAfter`.
 - `links_target_snapshot_idx (target_page_id, snapshot_id)` replaces the index on `target_page_id` alone.
+- Issue #70 proposed two more indexes, and neither is needed.
+  - `pages (project_id) WHERE orphan_streak > 0`: the streak updates now read a batch's Pages through `pages_project_state_id_idx (project_id, state, id)` and are scoped to the Project.
+  - `pages (reactivated_check_id)`: the `reactivated` events now start from the batch's Fetches.
+- A job that exhausts its attempts still leaves its Check active. That gap predates batching and is outside #70's fix.

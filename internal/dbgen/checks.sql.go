@@ -708,7 +708,9 @@ type InsertReactivatedPageEventsParams struct {
 	UptoID  int64
 }
 
-// A Page discovery brought back in this Check always got a Fetch in it.
+// A Page discovery brought back in this Check always got a Fetch in it:
+// addLinkedPages reactivates linked Pages and then plans a Fetch for each of
+// them, in the same transaction.
 func (q *Queries) InsertReactivatedPageEvents(ctx context.Context, arg InsertReactivatedPageEventsParams) error {
 	_, err := q.db.Exec(ctx, insertReactivatedPageEvents, arg.CheckID, arg.AfterID, arg.UptoID)
 	return err

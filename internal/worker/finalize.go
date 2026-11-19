@@ -14,9 +14,9 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// DefaultFinalizeBatchSize is how many of a Check's Pages one FinalizeCheck
-// job finalizes (ADR 0007): about 0.3 s on a laptop, far below the job
-// timeout however large the Check.
+// DefaultFinalizeBatchSize is how many of a Check's Fetches bound one
+// FinalizeCheck job's batch of Pages (ADR 0007): under 0.8 s on a laptop on a
+// 2M-Page Check, far below the job timeout however large the Check.
 const DefaultFinalizeBatchSize = 10_000
 
 // finalizeTimeout is a FinalizeCheck job's River timeout. A batch takes well
@@ -81,7 +81,7 @@ func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.Finalize
 	if last { // the rest of the Project's Pages, fetched in the Check or not
 		upto = math.MaxInt64
 	}
-	b := batch{c: c, after: after, upto: upto}
+	b := finalizeBatch{c: c, after: after, upto: upto}
 	end := check.StateFinished
 	switch c.State {
 	case check.StateRunning:
@@ -137,8 +137,8 @@ func beginFinalize(ctx context.Context, q *dbgen.Queries, c dbgen.Check) (dbgen.
 	return q.GetCheck(ctx, c.ID)
 }
 
-// batch is the Pages of a Check's Project with ids in (after, upto].
-type batch struct {
+// finalizeBatch is the Pages of a Check's Project with ids in (after, upto].
+type finalizeBatch struct {
 	c           dbgen.Check
 	after, upto int64
 }
@@ -146,7 +146,7 @@ type batch struct {
 // recordNewPages records the batch's `new` events (Pages whose first Snapshot
 // is in this Check) and `reactivated` ones. Both are recorded for a cancelled
 // Check too.
-func (b batch) recordNewPages(ctx context.Context, q *dbgen.Queries) error {
+func (b finalizeBatch) recordNewPages(ctx context.Context, q *dbgen.Queries) error {
 	if err := q.InsertNewPageEvents(ctx, dbgen.InsertNewPageEventsParams{CheckID: b.c.ID, AfterID: b.after, UptoID: b.upto}); err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func (b batch) recordNewPages(ctx context.Context, q *dbgen.Queries) error {
 
 // countOrphans updates the batch's orphan streaks and records its vanished
 // and retired events.
-func (b batch) countOrphans(ctx context.Context, q *dbgen.Queries) error {
+func (b finalizeBatch) countOrphans(ctx context.Context, q *dbgen.Queries) error {
 	firstFetchID := b.c.FirstFetchID.Int64 // NULL only for a Check without Fetches
 	if err := q.ResetLinkedOrphanStreaks(ctx, dbgen.ResetLinkedOrphanStreaksParams{
 		CheckID: b.c.ID, ProjectID: b.c.ProjectID, AfterID: b.after, UptoID: b.upto, FirstFetchID: firstFetchID,
