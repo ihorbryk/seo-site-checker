@@ -96,26 +96,15 @@ UPDATE fetches SET job_id = $2 WHERE id = $1;
 -- name: SetCheckLanes :exec
 UPDATE checks SET lanes = $2 WHERE id = $1;
 
--- name: FinishCheck :exec
-UPDATE checks
-SET state = sqlc.arg(state), finished_at = now(),
-    count_snapshots = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'snapshot'),
-    count_failures = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'failure'),
-    count_skipped = (SELECT count(*) FROM fetches WHERE check_id = checks.id AND outcome = 'skipped')
-WHERE checks.id = sqlc.arg(id);
-
 -- name: RequestCancel :execrows
 -- A queued Check has nothing to wind down and is cancelled at once. A planning
 -- one becomes `cancelling` and stops planning; a running one becomes
--- `cancelling` and its lanes stop claiming Fetches.
+-- `cancelling` and its lanes stop claiming Fetches. Once FinalizeCheck has
+-- begun (ADR 0007) every Fetch is done and the Check can't be cancelled.
 UPDATE checks
 SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
     finished_at = CASE WHEN state = 'queued' THEN now() END
-WHERE id = $1 AND state IN ('queued', 'planning', 'running');
-
--- name: SkipPendingFetches :exec
-UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
-WHERE check_id = $1 AND state = 'pending';
+WHERE id = $1 AND state IN ('queued', 'planning', 'running') AND finalize_cursor IS NULL;
 
 -- name: CheckProgress :one
 SELECT
@@ -229,76 +218,8 @@ INSERT INTO page_events (check_id, page_id, kind)
 SELECT sqlc.arg(check_id), p, sqlc.arg(kind) FROM unnest(sqlc.arg(page_ids)::bigint[]) AS p
 ON CONFLICT DO NOTHING;
 
--- name: InsertNewPageEvents :exec
--- `new`: a Page that got its first Snapshot in this Check (the seed Page is
--- the Project's starting point, not a find).
-INSERT INTO page_events (check_id, page_id, kind)
-SELECT sqlc.arg(check_id), s.page_id, 'new'
-FROM snapshots s JOIN pages pg ON pg.id = s.page_id
-WHERE s.check_id = sqlc.arg(check_id) AND pg.origin <> 'seed'
-  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = s.page_id AND o.check_id < s.check_id)
-ON CONFLICT DO NOTHING;
-
--- name: InsertReactivatedPageEvents :exec
-INSERT INTO page_events (check_id, page_id, kind)
-SELECT sqlc.arg(check_id), pg.id, 'reactivated' FROM pages pg
-WHERE pg.reactivated_check_id = sqlc.arg(check_id)
-ON CONFLICT DO NOTHING;
-
--- name: SeedFetchOutcome :one
--- The outcome of the seed Page's Fetch in the Check; NULL until it is done.
-SELECT f.outcome FROM fetches f JOIN pages pg ON pg.id = f.page_id
-WHERE f.check_id = $1 AND pg.origin = 'seed';
-
 -- name: MarkOrphanCountingSkipped :exec
 UPDATE checks SET orphan_counting_skipped = true WHERE id = $1;
-
--- name: ResetLinkedOrphanStreaks :exec
--- Pages some other Page's Snapshot in the Check linked to are not orphaned. A
--- Page skipped in the Check sent no request, so its links come from its latest
--- earlier Snapshot.
-UPDATE pages pg SET orphan_streak = 0
-WHERE pg.orphan_streak > 0 AND pg.state = 'active' AND (
-    EXISTS (
-        SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
-        WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
-    OR EXISTS (
-        SELECT 1 FROM fetches sf
-        JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
-                      ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
-        JOIN links l ON l.snapshot_id = last.id
-        WHERE sf.check_id = sqlc.arg(check_id) AND sf.outcome = 'skipped'
-          AND sf.page_id <> pg.id AND l.target_page_id = pg.id));
-
--- name: CountOrphans :many
--- Orphaned Pages (discovered or manual, active, fetched in the Check without a
--- Fetch failure, linked by no other Page's Snapshot) get their streak raised;
--- the third orphaned Check retires a discovered Page. A manual Page's streak
--- stops at 2: it vanishes but is never retired. The seed Page is never
--- counted. Returns each orphaned Page's new streak.
-UPDATE pages pg
-SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
-    state = CASE WHEN pg.origin = 'discovered' AND pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
-WHERE pg.state = 'active' AND pg.origin IN ('discovered', 'manual')
-  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = pg.id AND f.outcome <> 'failure')
-  AND NOT EXISTS (
-      SELECT 1 FROM links l JOIN snapshots s ON s.id = l.snapshot_id
-      WHERE s.check_id = sqlc.arg(check_id) AND l.target_page_id = pg.id AND s.page_id <> pg.id)
-  AND NOT EXISTS (
-      SELECT 1 FROM fetches sf
-      JOIN LATERAL (SELECT s.id FROM snapshots s WHERE s.page_id = sf.page_id
-                    ORDER BY s.fetched_at DESC, s.id DESC LIMIT 1) last ON true
-      JOIN links l ON l.snapshot_id = last.id
-      WHERE sf.check_id = sqlc.arg(check_id) AND sf.outcome = 'skipped'
-        AND sf.page_id <> pg.id AND l.target_page_id = pg.id)
-RETURNING pg.id, pg.orphan_streak;
-
--- name: SetCheckEventCounts :exec
-UPDATE checks SET
-    count_new = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind IN ('new', 'reactivated')),
-    count_vanished = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'vanished'),
-    count_retired = (SELECT count(*) FROM page_events e WHERE e.check_id = checks.id AND e.kind = 'retired')
-WHERE id = $1;
 
 -- name: ListPageEvents :many
 -- One page of the Pages with the event kind in the Check (new includes
@@ -354,3 +275,138 @@ LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: CountSkippedFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped';
+
+-- FinalizeCheck (ADR 0007) works through a Check's Pages in batches by id:
+-- each batch is the Pages with ids in (after_id, upto_id], bounded by the
+-- page_ids of the Check's Fetches so it holds at most a batch of them.
+
+-- name: BeginFinalize :exec
+-- Zeroes the Report counts the batches add up and records the Check's lowest
+-- Fetch id (see 00043_finalize_batches.sql).
+UPDATE checks SET finalize_cursor = 0,
+    first_fetch_id = (SELECT min(f.id) FROM fetches f WHERE f.check_id = checks.id),
+    count_snapshots = 0, count_failures = 0, count_skipped = 0,
+    count_new = 0, count_vanished = 0, count_retired = 0
+WHERE checks.id = $1;
+
+-- name: FinalizeBatchEnd :one
+-- The page_id of the Check's batch_size-th Fetch after after_id, by page_id;
+-- no row when fewer are left, and the batch is the last one.
+SELECT page_id FROM fetches
+WHERE check_id = sqlc.arg(check_id) AND page_id > sqlc.arg(after_id)
+ORDER BY page_id
+OFFSET sqlc.arg(batch_size)::bigint - 1 LIMIT 1;
+
+-- name: SeedFetchOutcome :one
+-- The outcome of the seed Page's Fetch in the Check; NULL until it is done.
+SELECT f.outcome FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = $1 AND pg.origin = 'seed';
+
+-- name: SkipPendingFetches :exec
+UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
+WHERE check_id = sqlc.arg(check_id) AND page_id > sqlc.arg(after_id) AND page_id <= sqlc.arg(upto_id)
+  AND state = 'pending';
+
+-- name: ResetLinkedOrphanStreaks :exec
+-- Pages some other Page's Snapshot in the Check linked to are not orphaned. A
+-- Page skipped in the Check sent no request, so its links come from its latest
+-- earlier Snapshot. Each Page's links are read through
+-- links_target_snapshot_idx: from the Check's own Snapshots (ids from
+-- first_fetch_id on), then, only if none, from earlier ones. The CASE and the
+-- OFFSET 0 keep the planner from turning the lookups into joins over all the
+-- Check's links (4.7 s instead of 38 ms per batch of 10,000 Pages).
+UPDATE pages pg SET orphan_streak = 0
+WHERE pg.project_id = sqlc.arg(project_id) AND pg.state = 'active'
+  AND pg.id > sqlc.arg(after_id) AND pg.id <= sqlc.arg(upto_id) AND pg.orphan_streak > 0
+  AND CASE WHEN EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id >= sqlc.arg(first_fetch_id)
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        WHERE s.id = l.snapshot_id AND s.check_id = sqlc.arg(check_id) AND s.page_id <> pg.id
+                        OFFSET 0))
+      THEN true
+      ELSE EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id < sqlc.arg(first_fetch_id)
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        JOIN fetches sf ON sf.check_id = sqlc.arg(check_id) AND sf.page_id = s.page_id AND sf.outcome = 'skipped'
+                        WHERE s.id = l.snapshot_id AND s.page_id <> pg.id
+                          AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.page_id = s.page_id
+                                      ORDER BY s2.fetched_at DESC, s2.id DESC LIMIT 1)
+                        OFFSET 0))
+      END;
+
+-- name: CountOrphans :many
+-- Orphaned Pages (discovered or manual, active, fetched in the Check without a
+-- Fetch failure, linked by no other Page's Snapshot, as ResetLinkedOrphanStreaks
+-- reads links) get their streak raised; the third orphaned Check retires a
+-- discovered Page. A manual Page's streak stops at 2: it vanishes but is never
+-- retired. The seed Page is never counted. Returns each orphaned Page's new
+-- streak.
+UPDATE pages pg
+SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
+    state = CASE WHEN pg.origin = 'discovered' AND pg.orphan_streak + 1 >= 3 THEN 'retired' ELSE pg.state END
+WHERE pg.project_id = sqlc.arg(project_id) AND pg.state = 'active'
+  AND pg.id > sqlc.arg(after_id) AND pg.id <= sqlc.arg(upto_id) AND pg.origin IN ('discovered', 'manual')
+  AND EXISTS (SELECT 1 FROM fetches f WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = pg.id AND f.outcome <> 'failure')
+  AND CASE WHEN EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id >= sqlc.arg(first_fetch_id)
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        WHERE s.id = l.snapshot_id AND s.check_id = sqlc.arg(check_id) AND s.page_id <> pg.id
+                        OFFSET 0))
+      THEN false
+      ELSE NOT EXISTS (
+          SELECT 1 FROM links l WHERE l.target_page_id = pg.id AND l.snapshot_id < sqlc.arg(first_fetch_id)
+            AND EXISTS (SELECT 1 FROM snapshots s
+                        JOIN fetches sf ON sf.check_id = sqlc.arg(check_id) AND sf.page_id = s.page_id AND sf.outcome = 'skipped'
+                        WHERE s.id = l.snapshot_id AND s.page_id <> pg.id
+                          AND s.id = (SELECT s2.id FROM snapshots s2 WHERE s2.page_id = s.page_id
+                                      ORDER BY s2.fetched_at DESC, s2.id DESC LIMIT 1)
+                        OFFSET 0))
+      END
+RETURNING pg.id, pg.orphan_streak;
+
+-- name: InsertNewPageEvents :exec
+-- `new`: a Page that got its first Snapshot in this Check (the seed Page is
+-- the Project's starting point, not a find).
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT sqlc.arg(check_id), f.page_id, 'new'
+FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = sqlc.arg(check_id) AND f.page_id > sqlc.arg(after_id) AND f.page_id <= sqlc.arg(upto_id)
+  AND f.outcome = 'snapshot' AND pg.origin <> 'seed'
+  AND NOT EXISTS (SELECT 1 FROM snapshots o WHERE o.page_id = f.page_id AND o.check_id < sqlc.arg(check_id))
+ON CONFLICT DO NOTHING;
+
+-- name: InsertReactivatedPageEvents :exec
+-- A Page discovery brought back in this Check always got a Fetch in it:
+-- addLinkedPages reactivates linked Pages and then plans a Fetch for each of
+-- them, in the same transaction.
+INSERT INTO page_events (check_id, page_id, kind)
+SELECT sqlc.arg(check_id), pg.id, 'reactivated'
+FROM fetches f JOIN pages pg ON pg.id = f.page_id
+WHERE f.check_id = sqlc.arg(check_id) AND f.page_id > sqlc.arg(after_id) AND f.page_id <= sqlc.arg(upto_id)
+  AND pg.reactivated_check_id = sqlc.arg(check_id)
+ON CONFLICT DO NOTHING;
+
+-- name: AddFinalizeBatchCounts :exec
+-- Adds the batch's Fetch outcomes and page events to the Report counts and
+-- moves the cursor past it.
+UPDATE checks SET finalize_cursor = sqlc.arg(upto_id)::bigint,
+    count_snapshots = count_snapshots + b.snapshots, count_failures = count_failures + b.failures,
+    count_skipped = count_skipped + b.skipped,
+    count_new = count_new + e.new, count_vanished = count_vanished + e.vanished, count_retired = count_retired + e.retired
+FROM (
+    SELECT count(*) FILTER (WHERE bf.outcome = 'snapshot')::int AS snapshots,
+           count(*) FILTER (WHERE bf.outcome = 'failure')::int AS failures,
+           count(*) FILTER (WHERE bf.outcome = 'skipped')::int AS skipped
+    FROM fetches bf
+    WHERE bf.check_id = sqlc.arg(check_id) AND bf.page_id > sqlc.arg(after_id) AND bf.page_id <= sqlc.arg(upto_id)
+) b, (
+    SELECT count(*) FILTER (WHERE be.kind IN ('new', 'reactivated'))::int AS new,
+           count(*) FILTER (WHERE be.kind = 'vanished')::int AS vanished,
+           count(*) FILTER (WHERE be.kind = 'retired')::int AS retired
+    FROM page_events be
+    WHERE be.check_id = sqlc.arg(check_id) AND be.page_id > sqlc.arg(after_id) AND be.page_id <= sqlc.arg(upto_id)
+) e
+WHERE checks.id = sqlc.arg(check_id);
+
+-- name: EndCheck :exec
+UPDATE checks SET state = sqlc.arg(state), finished_at = now() WHERE id = sqlc.arg(id);

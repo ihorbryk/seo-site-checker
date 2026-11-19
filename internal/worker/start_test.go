@@ -290,8 +290,9 @@ func TestAPlanningCheckIsTheProjectsActiveCheck(t *testing.T) {
 // a duplicate of a job that is still running (ADR 0003).
 func TestJobTimeoutsStayBelowTheRescueDelay(t *testing.T) {
 	start := (&startWorker{}).Timeout(nil)
+	finalize := (&finalizeWorker{}).Timeout(nil)
 	longestLane := laneTimeout(120) // timeout_s is at most 120
-	if start <= time.Minute || start >= rescueStuckJobsAfter || longestLane >= rescueStuckJobsAfter {
-		t.Errorf("start %s, longest lane %s, rescue after %s", start, longestLane, rescueStuckJobsAfter)
+	if start <= time.Minute || start >= rescueStuckJobsAfter || finalize >= rescueStuckJobsAfter || longestLane >= rescueStuckJobsAfter {
+		t.Errorf("start %s, finalize %s, longest lane %s, rescue after %s", start, finalize, longestLane, rescueStuckJobsAfter)
 	}
 }

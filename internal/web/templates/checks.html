@@ -28,7 +28,7 @@
 <progress class="progress progress-info w-full" value="{{.Fetched}}" max="{{.Known}}"></progress>
 <p><b class="fetched">{{.Fetched}}</b> of <b class="known">{{.Known}}</b> Pages fetched, <b class="failures">{{.Failures}}</b> failed, <b class="discovered">{{.Discovered}}</b> newly discovered.</p>
 {{end}}
-{{if .Cancelling}}<p class="text-base-content/60">Cancelling…</p>{{else}}<form hx-post="{{.Path}}/cancel" action="{{.Path}}/cancel" method="post"><button class="btn btn-sm">Cancel</button></form>{{end}}
+{{if .Cancelling}}<p class="text-base-content/60">Cancelling…</p>{{else if not .Finalizing}}<form hx-post="{{.Path}}/cancel" action="{{.Path}}/cancel" method="post"><button class="btn btn-sm">Cancel</button></form>{{end}}
 {{with .InFlight}}<ul class="lanes space-y-0.5">{{range .}}<li class="mono font-mono text-xs text-base-content/70">fetching {{.Url}}</li>{{end}}</ul>{{end}}
 </div></div>
 {{end}}

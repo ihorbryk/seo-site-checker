@@ -49,7 +49,7 @@ A Page the user removed from the Page pool. It is never fetched or brought back 
 _Avoid_: Deleted page, excluded page (exclusion comes from exclude patterns, not removal)
 
 **Check**:
-One pass over a Project's Page pool, started by its schedule or manually. A Project has at most one active Check at a time. A Check ends finished, or cancelled by the user, which leaves it partial.
+One pass over a Project's Page pool, started by its schedule or manually. A Project has at most one active Check at a time. A Check ends finished, or cancelled by the user, which leaves it partial. Once all its Fetches are done and its Report is being recorded, it can no longer be cancelled.
 _Avoid_: Run, crawl, scan, job
 
 **Planning**:

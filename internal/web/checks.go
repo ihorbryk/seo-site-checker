@@ -255,7 +255,8 @@ func (s *server) loadProgress(r *http.Request, c dbgen.Check) (progressView, err
 	}
 	return progressView{
 		Path: checkPath(c.ProjectID, c.Number), Queued: c.State == check.StateQueued, Planning: c.State == check.StatePlanning, Cancelling: c.State == check.StateCancelling,
-		Finalizing: c.State == check.StateRunning && p.Fetched == p.Known,
+		// Once FinalizeCheck has begun the Check can't be cancelled (ADR 0007).
+		Finalizing: c.FinalizeCursor.Valid || c.State == check.StateRunning && p.Fetched == p.Known,
 		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, Discovered: discovered, InFlight: inflight,
 	}, nil
 }
