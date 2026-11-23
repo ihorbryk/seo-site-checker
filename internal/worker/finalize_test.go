@@ -86,8 +86,8 @@ func newFinalizeScenario(t *testing.T, batch int) *finalizeScenario {
 	for _, path := range []string{"/", "/a", "/c", "/d", "/f", "/g", "/h"} {
 		snap := testfixtures.Snapshot(t, pool, c, s.pages[path])
 		if tier, ok := scenarioTiers[path]; ok {
-			exec(`INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
-				VALUES ($1, $1, false, false, false, false, $2)`, snap.ID, tier)
+			exec(`INSERT INTO diffs (snapshot_id, check_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
+				VALUES ($1, $3, $1, false, false, false, false, $2)`, snap.ID, tier, c.ID)
 		}
 		switch path {
 		case "/":

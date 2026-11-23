@@ -177,17 +177,6 @@ func (q *Queries) CountDroppedURLs(ctx context.Context, checkID int64) (int64, e
 	return column_1, err
 }
 
-const countFetchFailures = `-- name: CountFetchFailures :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure'
-`
-
-func (q *Queries) CountFetchFailures(ctx context.Context, checkID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countFetchFailures, checkID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countOrphans = `-- name: CountOrphans :many
 UPDATE pages pg
 SET orphan_streak = CASE WHEN pg.origin = 'manual' THEN least(pg.orphan_streak + 1, 2) ELSE pg.orphan_streak + 1 END,
@@ -256,35 +245,6 @@ func (q *Queries) CountOrphans(ctx context.Context, arg CountOrphansParams) ([]C
 		return nil, err
 	}
 	return items, nil
-}
-
-const countPageEvents = `-- name: CountPageEvents :one
-SELECT count(*)::bigint FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY($2::text[])
-`
-
-type CountPageEventsParams struct {
-	CheckID int64
-	Kinds   []string
-}
-
-// How many rows ListPageEvents has across all its pages.
-func (q *Queries) CountPageEvents(ctx context.Context, arg CountPageEventsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countPageEvents, arg.CheckID, arg.Kinds)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const countSkippedFetches = `-- name: CountSkippedFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped'
-`
-
-func (q *Queries) CountSkippedFetches(ctx context.Context, checkID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countSkippedFetches, checkID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
 }
 
 const createCheck = `-- name: CreateCheck :one
@@ -961,49 +921,120 @@ func (q *Queries) ListDueProjects(ctx context.Context, now time.Time) ([]int64, 
 	return items, nil
 }
 
-const listFetchFailures = `-- name: ListFetchFailures :many
-SELECT p.url, f.failure_kind, f.message,
+const listFetchFailuresDense = `-- name: ListFetchFailuresDense :many
+SELECT p.url, h.failure_kind, h.message,
     EXISTS (
         SELECT 1 FROM fetches pf
-        WHERE pf.page_id = f.page_id AND pf.outcome = 'failure'
+        WHERE pf.page_id = h.page_id AND pf.outcome = 'failure'
           AND pf.check_id = (
               SELECT c2.id FROM checks c2
-              WHERE c2.project_id = c.project_id AND c2.id < c.id
+              WHERE c2.project_id = $1 AND c2.id < $2
                 AND c2.state IN ('finished', 'cancelled')
               ORDER BY c2.id DESC LIMIT 1)
     ) AS also_failed_previously
-FROM fetches f
-JOIN checks c ON c.id = f.check_id
-JOIN pages p ON p.id = f.page_id
-WHERE f.check_id = $1 AND f.outcome = 'failure'
+FROM pages p
+JOIN LATERAL (
+    SELECT f.page_id, f.failure_kind, f.message FROM fetches f
+    WHERE f.check_id = $2 AND f.page_id = p.id AND f.outcome = 'failure'
+    OFFSET 0
+) h ON true
+WHERE p.project_id = $1
 ORDER BY p.url
-LIMIT $3 OFFSET $2
+LIMIT $4 OFFSET $3
 `
 
-type ListFetchFailuresParams struct {
+type ListFetchFailuresDenseParams struct {
+	ProjectID int64
 	CheckID   int64
 	RowOffset int32
 	RowLimit  int32
 }
 
-type ListFetchFailuresRow struct {
+type ListFetchFailuresDenseRow struct {
 	Url                  string
 	FailureKind          pgtype.Text
 	Message              pgtype.Text
 	AlsoFailedPreviously bool
 }
 
-// One page of the fetch failures of a Check, by URL, with whether the Page also failed in the
-// Project's previous Check (the newest earlier Check that has ended).
-func (q *Queries) ListFetchFailures(ctx context.Context, arg ListFetchFailuresParams) ([]ListFetchFailuresRow, error) {
-	rows, err := q.db.Query(ctx, listFetchFailures, arg.CheckID, arg.RowOffset, arg.RowLimit)
+// One page of the fetch failures of a Check, by URL, with whether the Page also
+// failed in the Project's previous Check (the newest earlier Check that has
+// ended). Dense read: the Project's Pages in URL order, each probed for a
+// failure of the Check (OFFSET 0 keeps the planner from reordering the join).
+func (q *Queries) ListFetchFailuresDense(ctx context.Context, arg ListFetchFailuresDenseParams) ([]ListFetchFailuresDenseRow, error) {
+	rows, err := q.db.Query(ctx, listFetchFailuresDense,
+		arg.ProjectID,
+		arg.CheckID,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListFetchFailuresRow
+	var items []ListFetchFailuresDenseRow
 	for rows.Next() {
-		var i ListFetchFailuresRow
+		var i ListFetchFailuresDenseRow
+		if err := rows.Scan(
+			&i.Url,
+			&i.FailureKind,
+			&i.Message,
+			&i.AlsoFailedPreviously,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFetchFailuresSparse = `-- name: ListFetchFailuresSparse :many
+WITH hit AS MATERIALIZED (
+    SELECT f.page_id, f.failure_kind, f.message FROM fetches f
+    WHERE f.check_id = $1 AND f.outcome = 'failure'
+)
+SELECT p.url, hit.failure_kind, hit.message,
+    EXISTS (
+        SELECT 1 FROM fetches pf
+        WHERE pf.page_id = hit.page_id AND pf.outcome = 'failure'
+          AND pf.check_id = (
+              SELECT c2.id FROM checks c2 JOIN checks c ON c.id = $1
+              WHERE c2.project_id = c.project_id AND c2.id < c.id
+                AND c2.state IN ('finished', 'cancelled')
+              ORDER BY c2.id DESC LIMIT 1)
+    ) AS also_failed_previously
+FROM hit JOIN pages p ON p.id = hit.page_id
+ORDER BY p.url
+LIMIT $3 OFFSET $2
+`
+
+type ListFetchFailuresSparseParams struct {
+	CheckID   int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+type ListFetchFailuresSparseRow struct {
+	Url                  string
+	FailureKind          pgtype.Text
+	Message              pgtype.Text
+	AlsoFailedPreviously bool
+}
+
+// The same page for a Check with few failures: they come from
+// fetches_check_outcome_idx and only those are sorted.
+func (q *Queries) ListFetchFailuresSparse(ctx context.Context, arg ListFetchFailuresSparseParams) ([]ListFetchFailuresSparseRow, error) {
+	rows, err := q.db.Query(ctx, listFetchFailuresSparse, arg.CheckID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFetchFailuresSparseRow
+	for rows.Next() {
+		var i ListFetchFailuresSparseRow
 		if err := rows.Scan(
 			&i.Url,
 			&i.FailureKind,
@@ -1053,32 +1084,40 @@ func (q *Queries) ListInFlightFetches(ctx context.Context, checkID int64) ([]Lis
 	return items, nil
 }
 
-const listPageEvents = `-- name: ListPageEvents :many
-SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY($2::text[])
-ORDER BY pg.url, e.kind
-LIMIT $4 OFFSET $3
+const listPageEventsDense = `-- name: ListPageEventsDense :many
+SELECT p.url, h.kind FROM pages p
+JOIN LATERAL (
+    SELECT e.kind FROM page_events e
+    WHERE e.check_id = $1 AND e.page_id = p.id AND e.kind = ANY($2::text[])
+    OFFSET 0
+) h ON true
+WHERE p.project_id = $3
+ORDER BY p.url, h.kind
+LIMIT $5 OFFSET $4
 `
 
-type ListPageEventsParams struct {
+type ListPageEventsDenseParams struct {
 	CheckID   int64
 	Kinds     []string
+	ProjectID int64
 	RowOffset int32
 	RowLimit  int32
 }
 
-type ListPageEventsRow struct {
+type ListPageEventsDenseRow struct {
 	Url  string
 	Kind string
 }
 
 // One page of the Pages with the event kind in the Check (new includes
 // reactivated), by URL. A Report is fixed when its Check ends, so Pages
-// ignored since stay (ADR 0008).
-func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) ([]ListPageEventsRow, error) {
-	rows, err := q.db.Query(ctx, listPageEvents,
+// ignored since stay (ADR 0008). Dense read: the Project's Pages in URL order,
+// each probed for an event of the Check.
+func (q *Queries) ListPageEventsDense(ctx context.Context, arg ListPageEventsDenseParams) ([]ListPageEventsDenseRow, error) {
+	rows, err := q.db.Query(ctx, listPageEventsDense,
 		arg.CheckID,
 		arg.Kinds,
+		arg.ProjectID,
 		arg.RowOffset,
 		arg.RowLimit,
 	)
@@ -1086,9 +1125,58 @@ func (q *Queries) ListPageEvents(ctx context.Context, arg ListPageEventsParams) 
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPageEventsRow
+	var items []ListPageEventsDenseRow
 	for rows.Next() {
-		var i ListPageEventsRow
+		var i ListPageEventsDenseRow
+		if err := rows.Scan(&i.Url, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPageEventsSparse = `-- name: ListPageEventsSparse :many
+WITH hit AS MATERIALIZED (
+    SELECT e.page_id, e.kind FROM page_events e
+    WHERE e.check_id = $3 AND e.kind = ANY($4::text[])
+)
+SELECT p.url, hit.kind FROM hit JOIN pages p ON p.id = hit.page_id
+ORDER BY p.url, hit.kind
+LIMIT $2 OFFSET $1
+`
+
+type ListPageEventsSparseParams struct {
+	RowOffset int32
+	RowLimit  int32
+	CheckID   int64
+	Kinds     []string
+}
+
+type ListPageEventsSparseRow struct {
+	Url  string
+	Kind string
+}
+
+// The same page for a kind with few events: they come from
+// page_events_check_kind_idx and only those are sorted.
+func (q *Queries) ListPageEventsSparse(ctx context.Context, arg ListPageEventsSparseParams) ([]ListPageEventsSparseRow, error) {
+	rows, err := q.db.Query(ctx, listPageEventsSparse,
+		arg.RowOffset,
+		arg.RowLimit,
+		arg.CheckID,
+		arg.Kinds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPageEventsSparseRow
+	for rows.Next() {
+		var i ListPageEventsSparseRow
 		if err := rows.Scan(&i.Url, &i.Kind); err != nil {
 			return nil, err
 		}
@@ -1141,34 +1229,89 @@ func (q *Queries) ListPlanBatch(ctx context.Context, arg ListPlanBatchParams) ([
 	return items, nil
 }
 
-const listSkippedFetches = `-- name: ListSkippedFetches :many
-SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
-WHERE f.check_id = $1 AND f.outcome = 'skipped'
+const listSkippedFetchesDense = `-- name: ListSkippedFetchesDense :many
+SELECT p.url, h.skip_reason FROM pages p
+JOIN LATERAL (
+    SELECT f.skip_reason FROM fetches f
+    WHERE f.check_id = $1 AND f.page_id = p.id AND f.outcome = 'skipped'
+    OFFSET 0
+) h ON true
+WHERE p.project_id = $2
 ORDER BY p.url
-LIMIT $3 OFFSET $2
+LIMIT $4 OFFSET $3
 `
 
-type ListSkippedFetchesParams struct {
+type ListSkippedFetchesDenseParams struct {
 	CheckID   int64
+	ProjectID int64
 	RowOffset int32
 	RowLimit  int32
 }
 
-type ListSkippedFetchesRow struct {
+type ListSkippedFetchesDenseRow struct {
 	Url        string
 	SkipReason pgtype.Text
 }
 
-// One page of a Check's skipped Fetches, by URL.
-func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetchesParams) ([]ListSkippedFetchesRow, error) {
-	rows, err := q.db.Query(ctx, listSkippedFetches, arg.CheckID, arg.RowOffset, arg.RowLimit)
+// One page of a Check's skipped Fetches, by URL. Dense read: the Project's
+// Pages in URL order, each probed for a skipped Fetch of the Check.
+func (q *Queries) ListSkippedFetchesDense(ctx context.Context, arg ListSkippedFetchesDenseParams) ([]ListSkippedFetchesDenseRow, error) {
+	rows, err := q.db.Query(ctx, listSkippedFetchesDense,
+		arg.CheckID,
+		arg.ProjectID,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSkippedFetchesRow
+	var items []ListSkippedFetchesDenseRow
 	for rows.Next() {
-		var i ListSkippedFetchesRow
+		var i ListSkippedFetchesDenseRow
+		if err := rows.Scan(&i.Url, &i.SkipReason); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSkippedFetchesSparse = `-- name: ListSkippedFetchesSparse :many
+WITH hit AS MATERIALIZED (
+    SELECT f.page_id, f.skip_reason FROM fetches f
+    WHERE f.check_id = $3 AND f.outcome = 'skipped'
+)
+SELECT p.url, hit.skip_reason FROM hit JOIN pages p ON p.id = hit.page_id
+ORDER BY p.url
+LIMIT $2 OFFSET $1
+`
+
+type ListSkippedFetchesSparseParams struct {
+	RowOffset int32
+	RowLimit  int32
+	CheckID   int64
+}
+
+type ListSkippedFetchesSparseRow struct {
+	Url        string
+	SkipReason pgtype.Text
+}
+
+// The same page for a Check with few skipped Fetches: they come from
+// fetches_check_outcome_idx and only those are sorted.
+func (q *Queries) ListSkippedFetchesSparse(ctx context.Context, arg ListSkippedFetchesSparseParams) ([]ListSkippedFetchesSparseRow, error) {
+	rows, err := q.db.Query(ctx, listSkippedFetchesSparse, arg.RowOffset, arg.RowLimit, arg.CheckID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkippedFetchesSparseRow
+	for rows.Next() {
+		var i ListSkippedFetchesSparseRow
 		if err := rows.Scan(&i.Url, &i.SkipReason); err != nil {
 			return nil, err
 		}

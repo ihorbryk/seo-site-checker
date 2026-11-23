@@ -60,8 +60,8 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 		FROM fetches f JOIN pages p ON p.id = f.page_id,
 			LATERAL (SELECT p.url ~ '/c[0-9]+$' AND right(p.url, 3)::int % 3 = 0 AS redirects) r
 		WHERE f.check_id = $1 AND f.outcome = 'snapshot'`, checkID)
-	s.Exec(`INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
-		SELECT sn.id, sn.id, false, false, false, tier <> 'empty', tier
+	s.Exec(`INSERT INTO diffs (snapshot_id, check_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
+		SELECT sn.id, sn.check_id, sn.id, false, false, false, tier <> 'empty', tier
 		FROM snapshots sn JOIN pages p ON p.id = sn.page_id,
 			LATERAL (SELECT CASE
 				WHEN p.url ~ '/u[0-9]+$' THEN 'empty'
@@ -299,8 +299,9 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	if w.Code != 200 || frag.Find("#failures-section").Length() != 1 || frag.Find("#report-header, #changed, #new").Length() != 0 {
 		t.Errorf("section fragment: status %d, body %.200s", w.Code, w.Body.String())
 	}
+	queries = withoutReadVariant(queries)
 	slices.Sort(queries)
-	if want := []string{"CountFetchFailures", "GetCheckByNumber", "GetProject", "ListFetchFailures", "ProjectOwner"}; !slices.Equal(queries, want) {
+	if want := []string{"GetCheckByNumber", "GetProject", "ListFetchFailures", "ProjectOwner"}; !slices.Equal(queries, want) {
 		t.Errorf("section request ran %v, want only %v", queries, want)
 	}
 
@@ -323,11 +324,11 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	changedHx := sectionPager(d, "changed").Find("a.next").AttrOr("hx-get", "")
 	queries = s.WebQueries(func() { w = s.GetHTMX(changedHx) })
 	ran := map[string]bool{}
-	for _, q := range queries {
+	for _, q := range withoutReadVariant(queries) {
 		ran[q] = true
 	}
 	for q := range ran {
-		if !slices.Contains([]string{"ProjectOwner", "GetCheckByNumber", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
+		if !slices.Contains([]string{"ProjectOwner", "GetCheckByNumber", "GetProject", "ListChangedSnapshotIDs", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
 			t.Errorf("Changed section request ran %s (all: %v)", q, queries)
 		}
 	}
@@ -339,4 +340,15 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	if w := s.Get(hx); w.Code != 303 || w.Header().Get("Location") != path+"?"+strings.SplitN(hx, "?", 2)[1]+"#failures" {
 		t.Errorf("full load of section URL: status %d, Location %q", w.Code, w.Header().Get("Location"))
 	}
+}
+
+// withoutReadVariant names each list query by its section alone: a section is
+// read by walking the Pages (Dense) or from an index of its own rows (Sparse),
+// chosen by its stored count.
+func withoutReadVariant(queries []string) []string {
+	out := make([]string, len(queries))
+	for i, q := range queries {
+		out[i] = strings.TrimSuffix(strings.TrimSuffix(q, "Dense"), "Sparse")
+	}
+	return out
 }
