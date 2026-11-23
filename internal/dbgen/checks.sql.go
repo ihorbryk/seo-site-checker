@@ -12,6 +12,36 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addCheckProgress = `-- name: AddCheckProgress :exec
+UPDATE checks SET
+    progress_known = progress_known + $1::bigint,
+    progress_fetched = progress_fetched + $2::bigint,
+    progress_failed = progress_failed + $3::bigint,
+    progress_discovered = progress_discovered + $4::bigint
+WHERE id = $5
+`
+
+type AddCheckProgressParams struct {
+	Known      int64
+	Fetched    int64
+	Failed     int64
+	Discovered int64
+	ID         int64
+}
+
+// Adds to the Check's running progress counters. Only a transaction that holds
+// the Check row lock calls it (a planning batch, a lane step).
+func (q *Queries) AddCheckProgress(ctx context.Context, arg AddCheckProgressParams) error {
+	_, err := q.db.Exec(ctx, addCheckProgress,
+		arg.Known,
+		arg.Fetched,
+		arg.Failed,
+		arg.Discovered,
+		arg.ID,
+	)
+	return err
+}
+
 const addFinalizeBatchCounts = `-- name: AddFinalizeBatchCounts :exec
 UPDATE checks SET finalize_cursor = $1::bigint,
     count_snapshots = count_snapshots + b.snapshots, count_failures = count_failures + b.failures,
@@ -84,27 +114,6 @@ func (q *Queries) BeginPlanning(ctx context.Context, arg BeginPlanningParams) er
 	return err
 }
 
-const checkProgress = `-- name: CheckProgress :one
-SELECT
-    count(*)::bigint AS known,
-    count(*) FILTER (WHERE state = 'done')::bigint AS fetched,
-    count(*) FILTER (WHERE outcome = 'failure')::bigint AS failures
-FROM fetches WHERE check_id = $1
-`
-
-type CheckProgressRow struct {
-	Known    int64
-	Fetched  int64
-	Failures int64
-}
-
-func (q *Queries) CheckProgress(ctx context.Context, checkID int64) (CheckProgressRow, error) {
-	row := q.db.QueryRow(ctx, checkProgress, checkID)
-	var i CheckProgressRow
-	err := row.Scan(&i.Known, &i.Fetched, &i.Failures)
-	return i, err
-}
-
 const claimNextFetch = `-- name: ClaimNextFetch :one
 UPDATE fetches SET state = 'in_flight', job_id = $1, started_at = now()
 WHERE id = (
@@ -159,19 +168,6 @@ SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure'
 
 func (q *Queries) CountFetchFailures(ctx context.Context, checkID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, countFetchFailures, checkID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const countNewlyDiscoveredPages = `-- name: CountNewlyDiscoveredPages :one
-SELECT count(*)::bigint FROM pages pg JOIN checks c ON c.id = $1
-WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_at >= c.started_at
-`
-
-// Pages the Check's own discovery added to the pool.
-func (q *Queries) CountNewlyDiscoveredPages(ctx context.Context, id int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countNewlyDiscoveredPages, id)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -265,17 +261,6 @@ func (q *Queries) CountPageEvents(ctx context.Context, arg CountPageEventsParams
 	return column_1, err
 }
 
-const countPendingFetches = `-- name: CountPendingFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending'
-`
-
-func (q *Queries) CountPendingFetches(ctx context.Context, checkID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countPendingFetches, checkID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countSkippedFetches = `-- name: CountSkippedFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped'
 `
@@ -295,7 +280,7 @@ WITH n AS (
 )
 INSERT INTO checks (project_id, trigger, number)
 SELECT $1, $2, n.last_check_number FROM n
-RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id
+RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered
 `
 
 type CreateCheckParams struct {
@@ -335,6 +320,10 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.PlanCursor,
 		&i.FinalizeCursor,
 		&i.FirstFetchID,
+		&i.ProgressKnown,
+		&i.ProgressFetched,
+		&i.ProgressFailed,
+		&i.ProgressDiscovered,
 	)
 	return i, err
 }
@@ -427,7 +416,7 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered FROM checks
 WHERE project_id = $1 AND state IN ('queued', 'planning', 'running', 'cancelling')
 `
 
@@ -460,12 +449,16 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.PlanCursor,
 		&i.FinalizeCursor,
 		&i.FirstFetchID,
+		&i.ProgressKnown,
+		&i.ProgressFetched,
+		&i.ProgressFailed,
+		&i.ProgressDiscovered,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -497,12 +490,16 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.PlanCursor,
 		&i.FinalizeCursor,
 		&i.FirstFetchID,
+		&i.ProgressKnown,
+		&i.ProgressFetched,
+		&i.ProgressFailed,
+		&i.ProgressDiscovered,
 	)
 	return i, err
 }
 
 const getCheckByNumber = `-- name: GetCheckByNumber :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE project_id = $1 AND number = $2
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered FROM checks WHERE project_id = $1 AND number = $2
 `
 
 type GetCheckByNumberParams struct {
@@ -539,6 +536,10 @@ func (q *Queries) GetCheckByNumber(ctx context.Context, arg GetCheckByNumberPara
 		&i.PlanCursor,
 		&i.FinalizeCursor,
 		&i.FirstFetchID,
+		&i.ProgressKnown,
+		&i.ProgressFetched,
+		&i.ProgressFailed,
+		&i.ProgressDiscovered,
 	)
 	return i, err
 }
@@ -749,10 +750,13 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor, c.finalize_cursor, c.first_fetch_id,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor, c.finalize_cursor, c.first_fetch_id, c.progress_known, c.progress_fetched, c.progress_failed, c.progress_discovered,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
+          ELSE c.progress_known END)::bigint AS known,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
+          ELSE c.progress_fetched END)::bigint AS fetched,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_failures
+          ELSE c.progress_failed END)::bigint AS failures,
     (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
      WHERE s.check_id = c.id AND d.tier <> 'empty' AND g.state <> 'ignored')::bigint AS changed,
     (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
@@ -798,6 +802,10 @@ type ListCheckRowsRow struct {
 	PlanCursor            int64
 	FinalizeCursor        pgtype.Int8
 	FirstFetchID          pgtype.Int8
+	ProgressKnown         int64
+	ProgressFetched       int64
+	ProgressFailed        int64
+	ProgressDiscovered    int64
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -809,6 +817,8 @@ type ListCheckRowsRow struct {
 
 // One page of the Checks tab: Checks newest first with their progress and,
 // once ended, the Report counts. Changed counts leave out Pages now ignored.
+// Known, Fetched and Failures never count Fetches: an active Check has its
+// running counters, an ended one its stored Fetch outcomes (every Fetch is done).
 func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([]ListCheckRowsRow, error) {
 	rows, err := q.db.Query(ctx, listCheckRows, arg.ProjectID, arg.RowOffset, arg.RowLimit)
 	if err != nil {
@@ -844,6 +854,10 @@ func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([
 			&i.PlanCursor,
 			&i.FinalizeCursor,
 			&i.FirstFetchID,
+			&i.ProgressKnown,
+			&i.ProgressFetched,
+			&i.ProgressFailed,
+			&i.ProgressDiscovered,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -1121,7 +1135,7 @@ func (q *Queries) ListSkippedFetches(ctx context.Context, arg ListSkippedFetches
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -1153,6 +1167,10 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.PlanCursor,
 		&i.FinalizeCursor,
 		&i.FirstFetchID,
+		&i.ProgressKnown,
+		&i.ProgressFetched,
+		&i.ProgressFailed,
+		&i.ProgressDiscovered,
 	)
 	return i, err
 }
@@ -1456,7 +1474,7 @@ func (q *Queries) SkipPendingFetches(ctx context.Context, arg SkipPendingFetches
 	return err
 }
 
-const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :exec
+const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :execrows
 INSERT INTO pages (project_id, url, origin, excluded)
 SELECT $1, u.url, 'discovered', f.excluded
 FROM unnest($2::text[]) WITH ORDINALITY AS u(url, n)
@@ -1470,9 +1488,13 @@ type UpsertDiscoveredPagesParams struct {
 	Excluded  []bool
 }
 
-// Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
-// excluded[i] is the answer for urls[i] under the Project's current patterns.
-func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) error {
-	_, err := q.db.Exec(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls, arg.Excluded)
-	return err
+// Adds the URLs as discovered Pages of the Project, leaving existing ones alone;
+// returns how many it added. excluded[i] is the answer for urls[i] under the
+// Project's current patterns.
+func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls, arg.Excluded)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

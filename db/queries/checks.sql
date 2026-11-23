@@ -106,12 +106,15 @@ SET state = CASE WHEN state = 'queued' THEN 'cancelled' ELSE 'cancelling' END,
     finished_at = CASE WHEN state = 'queued' THEN now() END
 WHERE id = $1 AND state IN ('queued', 'planning', 'running') AND finalize_cursor IS NULL;
 
--- name: CheckProgress :one
-SELECT
-    count(*)::bigint AS known,
-    count(*) FILTER (WHERE state = 'done')::bigint AS fetched,
-    count(*) FILTER (WHERE outcome = 'failure')::bigint AS failures
-FROM fetches WHERE check_id = $1;
+-- name: AddCheckProgress :exec
+-- Adds to the Check's running progress counters. Only a transaction that holds
+-- the Check row lock calls it (a planning batch, a lane step).
+UPDATE checks SET
+    progress_known = progress_known + sqlc.arg(known)::bigint,
+    progress_fetched = progress_fetched + sqlc.arg(fetched)::bigint,
+    progress_failed = progress_failed + sqlc.arg(failed)::bigint,
+    progress_discovered = progress_discovered + sqlc.arg(discovered)::bigint
+WHERE id = sqlc.arg(id);
 
 -- name: ListInFlightFetches :many
 SELECT f.id, f.job_id, p.url
@@ -148,10 +151,15 @@ SELECT count(*)::bigint FROM checks WHERE project_id = $1;
 -- name: ListCheckRows :many
 -- One page of the Checks tab: Checks newest first with their progress and,
 -- once ended, the Report counts. Changed counts leave out Pages now ignored.
+-- Known, Fetched and Failures never count Fetches: an active Check has its
+-- running counters, an ended one its stored Fetch outcomes (every Fetch is done).
 SELECT c.*,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id)::bigint AS known,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.state = 'done')::bigint AS fetched,
-    (SELECT count(*) FROM fetches f WHERE f.check_id = c.id AND f.outcome = 'failure')::bigint AS failures,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
+          ELSE c.progress_known END)::bigint AS known,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
+          ELSE c.progress_fetched END)::bigint AS fetched,
+    (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_failures
+          ELSE c.progress_failed END)::bigint AS failures,
     (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
      WHERE s.check_id = c.id AND d.tier <> 'empty' AND g.state <> 'ignored')::bigint AS changed,
     (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
@@ -164,14 +172,10 @@ FROM checks c WHERE c.project_id = sqlc.arg(project_id)
 ORDER BY c.created_at DESC, c.id DESC
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
--- name: CountNewlyDiscoveredPages :one
--- Pages the Check's own discovery added to the pool.
-SELECT count(*)::bigint FROM pages pg JOIN checks c ON c.id = $1
-WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_at >= c.started_at;
-
--- name: UpsertDiscoveredPages :exec
--- Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
--- excluded[i] is the answer for urls[i] under the Project's current patterns.
+-- name: UpsertDiscoveredPages :execrows
+-- Adds the URLs as discovered Pages of the Project, leaving existing ones alone;
+-- returns how many it added. excluded[i] is the answer for urls[i] under the
+-- Project's current patterns.
 INSERT INTO pages (project_id, url, origin, excluded)
 SELECT sqlc.arg(project_id), u.url, 'discovered', f.excluded
 FROM unnest(sqlc.arg(urls)::text[]) WITH ORDINALITY AS u(url, n)
@@ -201,9 +205,6 @@ INSERT INTO dropped_urls (check_id, url, reason)
 SELECT sqlc.arg(check_id), u, sqlc.arg(reason)
 FROM unnest(sqlc.arg(urls)::text[]) AS u
 ON CONFLICT DO NOTHING;
-
--- name: CountPendingFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending';
 
 -- name: CountDroppedURLs :one
 -- URLs the Check dropped under the sanity limits.

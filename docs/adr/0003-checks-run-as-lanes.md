@@ -16,3 +16,4 @@ Each River job that executes a Check is a **lane**. A lane claims one pending Fe
 - A delay between requests to the same host, if fetch policy wants one, is added by scheduling the lane's next job later.
 - The Fetches a lane claims are planned before the lanes start, in batches across several StartCheck jobs (ADR 0006).
 - FinalizeCheck, which the last lane enqueues, works through the Check's Pages in batches (ADR 0007).
+- A Check carries running progress counters (`progress_known`, `progress_fetched`, `progress_failed`, `progress_discovered`), changed only in the planning batch and lane transactions that hold the Check row. The progress view and the Checks tab read them (an ended Check's row reads its stored Report counts), so neither counts Fetches or Pages (#75).

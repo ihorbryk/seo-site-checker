@@ -93,6 +93,10 @@ type Check struct {
 	PlanCursor            int64
 	FinalizeCursor        pgtype.Int8
 	FirstFetchID          pgtype.Int8
+	ProgressKnown         int64
+	ProgressFetched       int64
+	ProgressFailed        int64
+	ProgressDiscovered    int64
 }
 
 type Diff struct {

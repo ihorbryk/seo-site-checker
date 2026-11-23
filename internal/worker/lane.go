@@ -162,29 +162,44 @@ func continueLane(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *d
 // raiseLanes starts extra lanes, each with a Fetch already claimed, while
 // Fetches are pending and the Check runs fewer than max_parallel lanes (for
 // example after discovery added Fetches). It runs under the Check row lock and
-// returns how many lanes it started.
+// returns how many lanes it started. It reads at most one pending Fetch per
+// free lane, and none when the Check already runs max_parallel lanes, so its
+// cost does not grow with the Check's pending Fetches.
 func raiseLanes(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbgen.Queries, chk dbgen.Check, args check.LaneArgs) (int32, error) {
 	settings, err := check.ParseSettings(chk.Settings)
 	if err != nil {
 		return 0, err
 	}
-	pending, err := q.CountPendingFetches(ctx, chk.ID)
-	if err != nil {
-		return 0, err
-	}
-	extra := min(int64(settings.MaxParallel)-int64(chk.Lanes), pending)
 	var started int32
-	for ; extra > 0; extra-- {
-		lane, err := rc.InsertTx(ctx, tx, args, nil)
+	for chk.Lanes+started < int32(settings.MaxParallel) {
+		ok, err := startLane(ctx, rc, tx, q, chk.ID, args)
 		if err != nil {
 			return 0, err
 		}
-		if _, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
-			JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}, CheckID: chk.ID,
-		}); err != nil {
-			return 0, err
+		if !ok {
+			break
 		}
 		started++
 	}
 	return started, nil
+}
+
+// startLane claims the Check's next pending Fetch for a new lane job and
+// enqueues that job. It returns false, and starts nothing, when no Fetch is
+// pending.
+func startLane(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbgen.Queries, checkID int64, args check.LaneArgs) (bool, error) {
+	next, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{CheckID: checkID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	// The lane job's id is known only once it is inserted.
+	lane, err := rc.InsertTx(ctx, tx, args, nil)
+	if err != nil {
+		return false, err
+	}
+	err = q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}})
+	return err == nil, err
 }

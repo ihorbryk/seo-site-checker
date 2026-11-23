@@ -241,23 +241,17 @@ type progressView struct {
 }
 
 func (s *server) loadProgress(r *http.Request, c dbgen.Check) (progressView, error) {
-	p, err := s.q.CheckProgress(r.Context(), c.ID)
-	if err != nil {
-		return progressView{}, err
-	}
 	inflight, err := s.q.ListInFlightFetches(r.Context(), c.ID)
-	if err != nil {
-		return progressView{}, err
-	}
-	discovered, err := s.q.CountNewlyDiscoveredPages(r.Context(), c.ID)
 	if err != nil {
 		return progressView{}, err
 	}
 	return progressView{
 		Path: checkPath(c.ProjectID, c.Number), Queued: c.State == check.StateQueued, Planning: c.State == check.StatePlanning, Cancelling: c.State == check.StateCancelling,
-		// Once FinalizeCheck has begun the Check can't be cancelled (ADR 0007).
-		Finalizing: c.FinalizeCursor.Valid || c.State == check.StateRunning && p.Fetched == p.Known,
-		Fetched:    p.Fetched, Known: p.Known, Failures: p.Failures, Discovered: discovered, InFlight: inflight,
+		// Every Fetch is done once a running Check has no lane left (the lane
+		// that ends the last one enqueues FinalizeCheck); once FinalizeCheck has
+		// begun the Check can't be cancelled (ADR 0007).
+		Finalizing: c.FinalizeCursor.Valid || c.State == check.StateRunning && c.Lanes == 0,
+		Fetched:    c.ProgressFetched, Known: c.ProgressKnown, Failures: c.ProgressFailed, Discovered: c.ProgressDiscovered, InFlight: inflight,
 	}, nil
 }
 
