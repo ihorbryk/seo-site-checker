@@ -96,6 +96,13 @@ func (p pager) Offset() int { return (p.Page - 1) * p.Per }
 // of total rows: the current page is rows Offset()+1 to End(total).
 func (p pager) End(total int) int { return min(p.Offset()+p.Per, total) }
 
+// window is the rows a query reads, in the width of the LIMIT and OFFSET
+// parameters sqlc generates.
+type window struct{ Limit, Offset int32 }
+
+// Window is the pager's current page as the rows a query reads.
+func (p pager) Window() window { return window{Limit: int32(p.Per), Offset: int32(p.Offset())} }
+
 // Shown is whether a Report section shows its pager: only when it has more
 // rows than the smallest page, so a large per can always be switched back.
 func (p pager) Shown() bool { return p.total > perPageChoices[0] }

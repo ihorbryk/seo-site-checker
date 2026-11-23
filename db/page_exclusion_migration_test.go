@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ihorbryk/seo-site-checker/internal/check"
+	"github.com/ihorbryk/seo-site-checker/internal/scheduler"
 	"github.com/ihorbryk/seo-site-checker/internal/testdb"
 	"github.com/ihorbryk/seo-site-checker/internal/worker"
 )
@@ -37,15 +39,36 @@ func TestPageExclusionMigrationClassifiesExistingPagesWithoutAnOperator(t *testi
 	if _, err := p.UpTo(ctx, pageExclusionMigration); err != nil {
 		t.Fatal(err)
 	}
-	var jobs int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind = 'exclude_recompute'`).Scan(&jobs); err != nil || jobs != 1 {
-		t.Fatalf("%d recompute jobs, err %v; want one, for the Project with patterns", jobs, err)
+	// The migration inserts no job (an old worker still running would fail
+	// the unknown kind until River discards it); it marks the recompute
+	// unfinished for the Project with patterns only.
+	var jobs, unfinished int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM river_job WHERE kind = 'exclude_recompute'),
+		(SELECT count(*) FROM projects WHERE exclude_gen > exclude_done_gen)`).Scan(&jobs, &unfinished); err != nil || jobs != 0 || unfinished != 1 {
+		t.Fatalf("%d recompute jobs, %d unfinished Projects, err %v; want none and one", jobs, unfinished, err)
 	}
-	// Down and up again queues one job again, not a second one.
+	// Down and up again marks it again, once.
 	if _, err := p.DownTo(ctx, pageExclusionMigration-1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.UpTo(ctx, pageExclusionMigration); err != nil {
+		t.Fatal(err)
+	}
+	// An old worker that claimed a job of this kind would fail it until River
+	// discards it; the scheduler queues the recompute again regardless.
+	rc, err := check.NewInsertClient(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if n, err := scheduler.RestartExclusions(ctx, pool, rc); err != nil || n != 1 {
+			t.Fatalf("restarted %d, err %v; want 1", n, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE river_job SET state = 'discarded', finalized_at = now(), attempt = max_attempts WHERE kind = 'exclude_recompute'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := scheduler.RestartExclusions(ctx, pool, rc); err != nil {
 		t.Fatal(err)
 	}
 

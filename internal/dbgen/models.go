@@ -103,6 +103,7 @@ type Check struct {
 	CountDiffBody         int32
 	CountDiffEmpty        int32
 	SeedFailed            bool
+	CountPages            int32
 }
 
 type Diff struct {
@@ -184,6 +185,7 @@ type Project struct {
 	LastCheckNumber int64
 	ExcludeGen      int64
 	ExcludeCursor   int64
+	ExcludeDoneGen  int64
 }
 
 type RiverJob struct {

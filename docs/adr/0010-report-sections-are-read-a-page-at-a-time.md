@@ -7,7 +7,7 @@ Every section is ordered by URL (Changed Pages by tier first), and the URL lives
 - **Dense**: walk the Project's Pages in URL order through the unique index on `(project_id, url)` and probe each Page for a row of the Check, through `fetches (check_id, page_id)`, `page_events` or, for a Diff, the Fetch with the Snapshot's id. It stops at the page's limit. It costs about `Fetches / count` probes per row.
 - **Sparse**: read the section's rows from an index that holds only them, then look up each row's Page and sort. It costs the section's rows, at most `Fetches / 100`.
 
-A section of `n` rows is dense when `n * 100 >= Fetches`, `Fetches` being the Check's stored Snapshot, failure and skipped counts. Either way the first page costs about 10,000 index probes or fewer at 2M Pages, and the web app never reads or sorts a whole section. The `LATERAL ... OFFSET 0` in each query keeps the planner from reordering the dense walk or joining the sparse rows in bulk on a stale estimate. Measured timings are in the PR for #78.
+A section of `n` rows is dense when `n * 100 >= Pages`, `Pages` being the number of the Project's Pages FinalizeCheck walked, stored on the Check as `count_pages` (migration 00049). A Check that ended before that column existed has 0 there and uses its stored Snapshot, failure and skipped counts instead. Either way the first page costs about 10,000 index probes or fewer at 2M Pages, and the web app never reads or sorts a whole section. The `LATERAL ... OFFSET 0` in each query keeps the planner from reordering the dense walk or joining the sparse rows in bulk on a stale estimate. Measured timings are in the PR for #78.
 
 Changed Pages are read per tier (critical, SEO, headers, body) from the four stored tier counts: a page covers a range of positions in the section, and each tier it overlaps is read at its own offset, so a page can span two tiers. Only the Snapshot ids are read this way; the costly columns (SEO changes, redirect target) come from `ListCheckDiffRows` for the ids on the page, so the formatting and redirect-chain lookups still run only for them.
 
@@ -17,7 +17,7 @@ Section totals are the stored counts, so `CountFetchFailures`, `CountSkippedFetc
 
 Migration 00048 adds, concurrently and safe to rerun:
 
-- `diffs.check_id`, backfilled from the Snapshot, and `diffs_check_tier_idx (check_id, tier, snapshot_id) WHERE tier <> 'empty'`. A Diff had no way to find its Check except through its Snapshot, and a Check's Diffs of one tier could only be found by reading all its Snapshots. It has no foreign key: a Diff goes with its Snapshot, which goes with the Check.
+- `diffs.check_id`, backfilled from the Snapshot in committed batches of 10,000 Diffs, filled by a BEFORE INSERT trigger when an insert omits it (the old worker still runs while the migration does; the trigger is kept, one skipped branch for new code), and `diffs_check_tier_idx (check_id, tier, snapshot_id) WHERE tier <> 'empty'`. A Diff had no way to find its Check except through its Snapshot, and a Check's Diffs of one tier could only be found by reading all its Snapshots. It has no foreign key: a Diff goes with its Snapshot, which goes with the Check.
 - `fetches_check_outcome_idx (check_id, outcome, page_id) WHERE outcome IN ('failure', 'skipped')`.
 - `page_events_check_kind_idx (check_id, kind, page_id)`.
 
@@ -31,5 +31,5 @@ Migration 00048 adds, concurrently and safe to rerun:
 ## Consequences
 
 - A very deep page of a dense section is slow, because the walk has to pass the rows before it (3.9 s at page 20,000 of 2M Changed Pages). The cost grows with how deep the page is, not with the size of the Check.
-- The pool used to choose is the Check's own Fetches, not the Project's Pages. A Project with many ignored or excluded Pages walks past them without finding a row, so a dense read costs somewhat more than estimated there; both reads stay correct.
+- The choice was first made against the Check's own Fetches. Measured on a Project of 2M Pages, 1.9M of them retired, a Check of 100,000 Fetches with 1,000 failures was judged dense, walked 110,000 Pages for its first page and took 330-370 ms; with 20,000 Fetches and 200 failures it walked 394,000 Pages and took 1.2 s, against the ticket's 100 ms. The walk steps over every Page of the Project, fetched or not, so the choice now uses the Pages FinalizeCheck walked; both of those sections are sparse (2-7 ms) and a dense read costs at most 100 Pages per row (timings in the #78 notes).
 - Rows deleted from a Check's Diffs outside FinalizeCheck would leave the stored counts and the lists disagreeing, as for every stored count (ADR 0008).

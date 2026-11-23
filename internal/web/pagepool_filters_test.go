@@ -57,7 +57,7 @@ func TestSQLFiltersAgreeWithPoolStateForEveryCombination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range poolFilters {
-		got, err := f.list(ctx, q, p.ID, 1000, 0)
+		got, err := f.list(ctx, q, p.ID, window{Limit: 1000})
 		if err != nil {
 			t.Fatal(err)
 		}

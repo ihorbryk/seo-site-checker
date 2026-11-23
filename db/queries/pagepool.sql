@@ -151,5 +151,22 @@ FROM unnest(sqlc.arg(page_ids)::bigint[]) WITH ORDINALITY AS i(id, n)
 JOIN unnest(sqlc.arg(flags)::boolean[]) WITH ORDINALITY AS f(excluded, n) USING (n)
 WHERE pages.id = i.id AND pages.excluded <> f.excluded;
 
+-- name: SetExcludeDone :exec
+-- The recompute of generation $2 reached the Project's last Page.
+UPDATE projects SET exclude_done_gen = $2 WHERE id = $1;
+
+-- name: ListUnfinishedExclusions :many
+-- Projects whose latest recompute has not reached its last Page and that have
+-- no job to continue it (ADR 0009): the job was discarded, or was failed by an
+-- old worker that does not know the kind.
+SELECT p.id FROM projects p
+WHERE p.exclude_gen > p.exclude_done_gen
+  AND NOT EXISTS (
+    SELECT 1 FROM river_job j
+    WHERE j.kind = 'exclude_recompute'
+      AND j.state IN ('available', 'scheduled', 'running', 'retryable', 'pending')
+      AND (j.args->>'project_id')::bigint = p.id)
+ORDER BY p.id;
+
 -- name: SetExcludeCursor :exec
 UPDATE projects SET exclude_cursor = $2 WHERE id = $1;

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/page"
+	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
 )
@@ -21,34 +22,39 @@ import (
 type poolFilter struct {
 	Key, Label string
 	count      func(dbgen.CountPagePoolRow) int64
-	list       func(context.Context, *dbgen.Queries, int64, int32, int32) ([]int64, error)
+	list       func(context.Context, *dbgen.Queries, int64, window) ([]int64, error)
 }
 
 // poolFilters are the Page pool tab's filters, in display order; "" is all.
+// The six list queries stay separate on purpose: each spells out its filter's
+// predicate so Postgres can serve it from that filter's partial index
+// (pages_pool_*_idx, migration 00047). One query taking the filter as a
+// parameter would not match a partial index and would scan the Project's
+// Pages.
 var poolFilters = []poolFilter{
 	{"", "All", func(c dbgen.CountPagePoolRow) int64 { return c.Total },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolAll(ctx, dbgen.ListPagePoolAllParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolAll(ctx, dbgen.ListPagePoolAllParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 	{page.StateActive, "Active", func(c dbgen.CountPagePoolRow) int64 { return c.Active },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolActive(ctx, dbgen.ListPagePoolActiveParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolActive(ctx, dbgen.ListPagePoolActiveParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 	{"orphaned", "Orphaned", func(c dbgen.CountPagePoolRow) int64 { return c.Orphaned },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolOrphaned(ctx, dbgen.ListPagePoolOrphanedParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolOrphaned(ctx, dbgen.ListPagePoolOrphanedParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 	{page.StateRetired, "Retired", func(c dbgen.CountPagePoolRow) int64 { return c.Retired },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolRetired(ctx, dbgen.ListPagePoolRetiredParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolRetired(ctx, dbgen.ListPagePoolRetiredParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 	{page.StateIgnored, "Ignored", func(c dbgen.CountPagePoolRow) int64 { return c.Ignored },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolIgnored(ctx, dbgen.ListPagePoolIgnoredParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolIgnored(ctx, dbgen.ListPagePoolIgnoredParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 	{"excluded", "Excluded", func(c dbgen.CountPagePoolRow) int64 { return c.Excluded },
-		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
-			return q.ListPagePoolExcluded(ctx, dbgen.ListPagePoolExcludedParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		func(ctx context.Context, q *dbgen.Queries, id int64, w window) ([]int64, error) {
+			return q.ListPagePoolExcluded(ctx, dbgen.ListPagePoolExcludedParams{ProjectID: id, RowLimit: w.Limit, RowOffset: w.Offset})
 		}},
 }
 
@@ -114,7 +120,7 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 	}
 	filter := cur.Key
 	pager := paginate(r.URL, int(cur.count(counts)))
-	ids, err := cur.list(r.Context(), s.q, p.ID, int32(pager.Per), int32(pager.Offset()))
+	ids, err := cur.list(r.Context(), s.q, p.ID, pager.Window())
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -340,12 +346,12 @@ func (s *server) addManualPage(ctx context.Context, projectID int64, url string)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	q := dbgen.New(tx)
-	patterns, err := q.LockProjectShared(ctx, projectID)
+	excluded, err := project.LockExclusion(ctx, q, projectID)
 	if err != nil {
 		return dbgen.Page{}, err
 	}
 	pg, err := q.AddManualPage(ctx, dbgen.AddManualPageParams{
-		ProjectID: projectID, Url: url, Excluded: page.Excluded(patterns, page.OriginManual, url),
+		ProjectID: projectID, Url: url, Excluded: excluded(page.OriginManual, url),
 	})
 	if err != nil {
 		return dbgen.Page{}, err

@@ -72,6 +72,12 @@ func (w *excludeWorker) Work(ctx context.Context, job *river.Job[check.ExcludeRe
 	for i, pg := range batch {
 		ids[i], flags[i] = pg.ID, page.Excluded(p.ExcludePatterns, pg.Origin, pg.Url)
 	}
+	if len(batch) < size {
+		// The chain ends here: record that the generation is complete.
+		if err := q.SetExcludeDone(ctx, dbgen.SetExcludeDoneParams{ID: p.ID, ExcludeDoneGen: p.ExcludeGen}); err != nil {
+			return err
+		}
+	}
 	if len(ids) > 0 {
 		if err := q.SetPagesExcluded(ctx, dbgen.SetPagesExcludedParams{PageIds: ids, Flags: flags}); err != nil {
 			return err

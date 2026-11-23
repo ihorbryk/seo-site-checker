@@ -12,6 +12,9 @@
 ALTER TABLE pages ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS exclude_gen bigint NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS exclude_cursor bigint NOT NULL DEFAULT 0;
+-- A recompute of generation exclude_gen is unfinished while exclude_done_gen
+-- is behind it; the worker catches it up after the last batch.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS exclude_done_gen bigint NOT NULL DEFAULT 0;
 
 -- One partial index per Page pool filter, in URL order. "All" is served by
 -- the (project_id, url) unique index.
@@ -33,20 +36,13 @@ DROP INDEX CONCURRENTLY IF EXISTS pages_project_id_idx;
 CREATE INDEX CONCURRENTLY pages_project_id_idx ON pages (project_id, id);
 
 -- Pages that exist now have no answer yet. A Project with no exclude patterns
--- is already right (nothing matches); every other Project gets a recompute
--- job, so no Operator action is needed. The job row is what River's insert
--- writes for ExcludeRecomputeArgs (see internal/check).
--- +goose StatementBegin
-WITH marked AS (
-    UPDATE projects SET exclude_gen = 1, exclude_cursor = 0
-    WHERE exclude_gen = 0 AND cardinality(exclude_patterns) > 0
-    RETURNING id, exclude_gen
-)
-INSERT INTO river_job (kind, queue, state, max_attempts, args)
-SELECT 'exclude_recompute', 'default', 'available', 5,
-       jsonb_build_object('project_id', id, 'generation', exclude_gen)
-FROM marked;
--- +goose StatementEnd
+-- is already right (nothing matches); every other Project is marked as having
+-- an unfinished recompute (generation 1, done generation 0), and the scheduler
+-- queues its job. The migration inserts no job itself: it runs while the old
+-- worker is still up, which would fail the unknown kind until River discards
+-- it, and the Pages would stay unclassified. The mark survives that.
+UPDATE projects SET exclude_gen = 1, exclude_cursor = 0
+WHERE exclude_gen = 0 AND cardinality(exclude_patterns) > 0;
 
 -- +goose Down
 DELETE FROM river_job WHERE kind = 'exclude_recompute' AND state IN ('available', 'scheduled', 'retryable');
@@ -56,6 +52,7 @@ DROP INDEX CONCURRENTLY IF EXISTS pages_pool_ignored_idx;
 DROP INDEX CONCURRENTLY IF EXISTS pages_pool_retired_idx;
 DROP INDEX CONCURRENTLY IF EXISTS pages_pool_orphaned_idx;
 DROP INDEX CONCURRENTLY IF EXISTS pages_pool_active_idx;
+ALTER TABLE projects DROP COLUMN IF EXISTS exclude_done_gen;
 ALTER TABLE projects DROP COLUMN IF EXISTS exclude_cursor;
 ALTER TABLE projects DROP COLUMN IF EXISTS exclude_gen;
 ALTER TABLE pages DROP COLUMN IF EXISTS excluded;

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/ihorbryk/seo-site-checker/internal/page"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 )
@@ -185,4 +186,19 @@ func SaveRequestSettings(ctx context.Context, db Beginner, rc *river.Client[pgx.
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// LockExclusion is the first half of ADR 0009's protocol for inserting Pages:
+// it takes the Project row FOR SHARE, to the end of q's transaction, so a save
+// of the exclude patterns (SaveRequestSettings, which takes the row FOR NO KEY
+// UPDATE) waits for the insert, and later inserts read the new patterns. It
+// returns the Project's current patterns as a function that answers the stored
+// exclusion of a Page of the given origin and URL. Every insert of a Page calls
+// it in the transaction that inserts the Page.
+func LockExclusion(ctx context.Context, q *dbgen.Queries, projectID int64) (func(origin, url string) bool, error) {
+	patterns, err := q.LockProjectShared(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return func(origin, url string) bool { return page.Excluded(patterns, origin, url) }, nil
 }

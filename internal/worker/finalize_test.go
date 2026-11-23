@@ -187,6 +187,11 @@ func TestFinalizingInBatchesRecordsTheSameEventsStreaksAndCounts(t *testing.T) {
 		if want := []int32{7, 1, 1, 2, 1, 1}; !slices.Equal(counts, want) {
 			t.Errorf("batch %d: snapshots, failures, skipped, new, vanished, retired = %v, want %v", batch, counts, want)
 		}
+		// The Report reads its sections against the Pages FinalizeCheck walked
+		// (ADR 0010), whether or not each was fetched.
+		if c.CountPages != 9 {
+			t.Errorf("batch %d: count_pages = %d, want 9", batch, c.CountPages)
+		}
 		if got, want := s.events(), []string{"new /f", "reactivated /h", "retired /d", "vanished /c"}; !slices.Equal(got, want) {
 			t.Errorf("batch %d: events %q, want %q", batch, got, want)
 		}
