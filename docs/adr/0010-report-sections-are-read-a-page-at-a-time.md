@@ -17,7 +17,7 @@ Section totals are the stored counts, so `CountFetchFailures`, `CountSkippedFetc
 
 Migration 00048 adds, concurrently and safe to rerun:
 
-- `diffs.check_id`, backfilled from the Snapshot, and `diffs_check_tier_idx (check_id, tier, snapshot_id) WHERE tier <> 'empty'`. A Diff had no way to find its Check except through its Snapshot, and a Check's Diffs of one tier could only be found by reading all its Snapshots. It has no foreign key: a Diff goes with its Snapshot, which goes with the Check.
+- `diffs.check_id`, backfilled from the Snapshot in committed batches of 10,000 Diffs, filled by a BEFORE INSERT trigger when an insert omits it (the old worker still runs while the migration does; the trigger is kept, one skipped branch for new code), and `diffs_check_tier_idx (check_id, tier, snapshot_id) WHERE tier <> 'empty'`. A Diff had no way to find its Check except through its Snapshot, and a Check's Diffs of one tier could only be found by reading all its Snapshots. It has no foreign key: a Diff goes with its Snapshot, which goes with the Check.
 - `fetches_check_outcome_idx (check_id, outcome, page_id) WHERE outcome IN ('failure', 'skipped')`.
 - `page_events_check_kind_idx (check_id, kind, page_id)`.
 
