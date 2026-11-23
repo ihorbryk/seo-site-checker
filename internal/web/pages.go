@@ -10,6 +10,7 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/page"
+	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5"
 )
@@ -345,12 +346,12 @@ func (s *server) addManualPage(ctx context.Context, projectID int64, url string)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	q := dbgen.New(tx)
-	patterns, err := q.LockProjectShared(ctx, projectID)
+	excluded, err := project.LockExclusion(ctx, q, projectID)
 	if err != nil {
 		return dbgen.Page{}, err
 	}
 	pg, err := q.AddManualPage(ctx, dbgen.AddManualPageParams{
-		ProjectID: projectID, Url: url, Excluded: page.Excluded(patterns, page.OriginManual, url),
+		ProjectID: projectID, Url: url, Excluded: excluded(page.OriginManual, url),
 	})
 	if err != nil {
 		return dbgen.Page{}, err

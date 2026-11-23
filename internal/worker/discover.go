@@ -7,6 +7,7 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/links"
 	"github.com/ihorbryk/seo-site-checker/internal/page"
+	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -57,15 +58,14 @@ func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *d
 		urls = append(urls, l.URL)
 	}
 	// The stored answer comes from the Project's current patterns, not the
-	// Check's frozen copy. The shared lock lasts to the end of the transaction,
-	// so a save of the patterns waits for this insert (ADR 0009).
-	patterns, err := q.LockProjectShared(ctx, f.ProjectID)
+	// Check's frozen copy (ADR 0009).
+	isExcluded, err := project.LockExclusion(ctx, q, f.ProjectID)
 	if err != nil {
 		return added, err
 	}
 	excluded := make([]bool, len(urls))
 	for i, u := range urls {
-		excluded[i] = page.Excluded(patterns, page.OriginDiscovered, u)
+		excluded[i] = isExcluded(page.OriginDiscovered, u)
 	}
 	if added.pages, err = q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls, Excluded: excluded}); err != nil {
 		return added, err
