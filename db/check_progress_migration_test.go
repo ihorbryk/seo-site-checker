@@ -55,6 +55,10 @@ func TestCheckProgressMigrationKeepsExistingChecksWorking(t *testing.T) {
 		t.Errorf("active Check counters known %d fetched %d failed %d discovered %d; want 4 2 1 3", known, fetched, failed, discovered)
 	}
 
+	// ListCheckRows also reads the columns of later migrations.
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
 	rows, err := dbgen.New(pool).ListCheckRows(ctx, dbgen.ListCheckRowsParams{ProjectID: 1, RowLimit: 10})
 	if err != nil {
 		t.Fatal(err)
