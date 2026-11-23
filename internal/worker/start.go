@@ -176,7 +176,11 @@ func (w *startWorker) planBatch(ctx context.Context, rc *river.Client[pgx.Tx], t
 		}
 	}
 	if len(planned) > 0 {
-		if _, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID, PageIds: planned}); err != nil {
+		n, err := q.PlanFetches(ctx, dbgen.PlanFetchesParams{CheckID: c.ID, ProjectID: c.ProjectID, PageIds: planned})
+		if err != nil {
+			return err
+		}
+		if err := q.AddCheckProgress(ctx, dbgen.AddCheckProgressParams{ID: c.ID, Known: n}); err != nil {
 			return err
 		}
 	}

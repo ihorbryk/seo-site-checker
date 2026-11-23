@@ -50,9 +50,14 @@ func TestAPlanningCheckShowsThePagesPlannedSoFar(t *testing.T) {
 		testfixtures.Page(t, s.Pool, p, "/b"),
 	}
 	c := testfixtures.Check(t, s.Pool, p, testfixtures.WithCheckState(check.StatePlanning))
-	if _, err := s.Q.PlanFetches(context.Background(), dbgen.PlanFetchesParams{
+	n, err := s.Q.PlanFetches(context.Background(), dbgen.PlanFetchesParams{
 		CheckID: c.ID, ProjectID: p.ID, PageIds: []int64{pages[0].ID, pages[1].ID},
-	}); err != nil {
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A planning batch counts the Fetches it plans on the Check (#75).
+	if err := s.Q.AddCheckProgress(context.Background(), dbgen.AddCheckProgressParams{ID: c.ID, Known: n}); err != nil {
 		t.Fatal(err)
 	}
 

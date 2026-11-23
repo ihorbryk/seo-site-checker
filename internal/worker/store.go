@@ -19,29 +19,50 @@ import (
 )
 
 // storeResult records a Fetch's result on the lane's transaction: a skip, a
-// failure, or a Snapshot with its body, Diff and outgoing links.
+// failure, or a Snapshot with its body, Diff and outgoing links. In the same
+// transaction (which holds the Check row lock) it adds the Fetch, and the
+// Pages and Fetches its URL discovery added, to the Check's progress counters.
 func storeResult(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, res fetchResult) error {
-	if res.SkipReason != "" {
-		return q.FinishFetchSkipped(ctx, dbgen.FinishFetchSkippedParams{
+	progress := dbgen.AddCheckProgressParams{ID: chk.ID, Fetched: 1}
+	switch {
+	case res.SkipReason != "":
+		err := q.FinishFetchSkipped(ctx, dbgen.FinishFetchSkippedParams{
 			ID: f.ID, SkipReason: pgtype.Text{String: res.SkipReason, Valid: true},
 		})
-	}
-	if res.FailKind != "" {
-		return q.FinishFetchFailure(ctx, dbgen.FinishFetchFailureParams{
+		if err != nil {
+			return err
+		}
+	case res.FailKind != "":
+		err := q.FinishFetchFailure(ctx, dbgen.FinishFetchFailureParams{
 			ID:          f.ID,
 			FailureKind: pgtype.Text{String: res.FailKind, Valid: true},
 			Message:     pgtype.Text{String: res.FailMsg, Valid: true},
 			DurationMs:  durationMs(res),
 		})
+		if err != nil {
+			return err
+		}
+		progress.Failed = 1
+	default:
+		added, err := storeSnapshotAndDiscover(ctx, q, chk, f, res)
+		if err != nil {
+			return err
+		}
+		progress.Known, progress.Discovered = added.fetches, added.pages
 	}
+	return q.AddCheckProgress(ctx, progress)
+}
+
+// storeSnapshotAndDiscover stores a Snapshot and discovers the URLs it links to.
+func storeSnapshotAndDiscover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, res fetchResult) (discovered, error) {
 	host := urlnorm.Host(f.Url)
 	target := redirect.Classify(res.Status, res.Headers, f.Url, host)
 	if err := storeSnapshot(ctx, q, chk, f, res, target); err != nil {
-		return err
+		return discovered{}, err
 	}
 	found, ok, err := outgoingLinks(res, target, f.Url, host)
 	if err != nil || !ok {
-		return err
+		return discovered{}, err
 	}
 	return discover(ctx, q, chk, f, found)
 }
