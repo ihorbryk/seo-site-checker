@@ -265,17 +265,6 @@ func (q *Queries) CountPageEvents(ctx context.Context, arg CountPageEventsParams
 	return column_1, err
 }
 
-const countPendingFetches = `-- name: CountPendingFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending'
-`
-
-func (q *Queries) CountPendingFetches(ctx context.Context, checkID int64) (int64, error) {
-	row := q.db.QueryRow(ctx, countPendingFetches, checkID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const countSkippedFetches = `-- name: CountSkippedFetches :one
 SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped'
 `
