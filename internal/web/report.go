@@ -85,11 +85,9 @@ func (s *server) buildReport(r *http.Request, c dbgen.Check, p dbgen.Project) (m
 			return nil, err
 		}
 	}
-	idx, err := s.diffIndex(rep)
-	if err != nil {
-		return nil, err
-	}
-	data["ChangedCount"], data["UnchangedCount"] = len(idx.changed), idx.unchanged
+	// The counts were stored when the Check ended (ADR 0008).
+	data["ChangedCount"] = int(c.CountDiffCritical) + int(c.CountDiffSeo) + int(c.CountDiffHeaders) + int(c.CountDiffBody)
+	data["UnchangedCount"] = int(c.CountDiffEmpty)
 	return data, nil
 }
 
@@ -205,12 +203,13 @@ func (s *server) checkChain(ctx context.Context, checkID, projectID int64, host,
 	return chain, lookupErr
 }
 
-// diffIndex is a Check's Diffs classified for its Report: the changed ones,
-// most significant first, and how many were unchanged. Pages that are now
-// ignored or excluded are left out of both.
+// diffIndex is a Check's changed Diffs for its Report, most significant
+// first. Every Diff of the Check is in it, whatever its Page's state is now:
+// a Report is fixed when its Check ends. This departs from story 78 of #19
+// (leave ignored and excluded Pages out of the Report) for Pages ignored or
+// excluded after the Check; see ADR 0008.
 type diffIndex struct {
-	changed   []int64 // snapshot ids
-	unchanged int
+	changed []int64 // snapshot ids
 }
 
 // diffIndex classifies the whole Check once per request from a light query,
@@ -225,13 +224,6 @@ func (s *server) diffIndex(rep *report) (*diffIndex, error) {
 	}
 	idx := &diffIndex{}
 	for _, d := range rows {
-		if d.State == page.StateIgnored || page.Excluded(rep.proj.ExcludePatterns, d.Origin, d.Url) {
-			continue
-		}
-		if d.Tier == string(diff.TierEmpty) {
-			idx.unchanged++
-			continue
-		}
 		idx.changed = append(idx.changed, d.SnapshotID)
 	}
 	rep.diffs = idx

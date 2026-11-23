@@ -93,6 +93,12 @@ type Check struct {
 	PlanCursor            int64
 	FinalizeCursor        pgtype.Int8
 	FirstFetchID          pgtype.Int8
+	CountDiffCritical     int32
+	CountDiffSeo          int32
+	CountDiffHeaders      int32
+	CountDiffBody         int32
+	CountDiffEmpty        int32
+	SeedFailed            bool
 }
 
 type Diff struct {

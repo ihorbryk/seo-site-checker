@@ -33,9 +33,16 @@ import (
 //	    first-Check Snapshot                         -> streak 0
 //	/h  Snapshot, brought back by discovery in this
 //	    Check; linked by /                           -> reactivated
+//
+// The Check's Diffs by tier: one Page each in critical, seo, headers and body,
+// and three empty ones (scenarioTiers).
 type finalizeScenario struct {
 	*planRig
 	pages map[string]dbgen.Page
+}
+
+var scenarioTiers = map[string]string{
+	"/": "critical", "/a": "seo", "/c": "body", "/d": "empty", "/f": "empty", "/g": "headers", "/h": "empty",
 }
 
 func newFinalizeScenario(t *testing.T, batch int) *finalizeScenario {
@@ -78,6 +85,10 @@ func newFinalizeScenario(t *testing.T, batch int) *finalizeScenario {
 	exec(`UPDATE pages SET reactivated_check_id = $2 WHERE id = $1`, s.pages["/h"].ID, c.ID)
 	for _, path := range []string{"/", "/a", "/c", "/d", "/f", "/g", "/h"} {
 		snap := testfixtures.Snapshot(t, pool, c, s.pages[path])
+		if tier, ok := scenarioTiers[path]; ok {
+			exec(`INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
+				VALUES ($1, $1, false, false, false, false, $2)`, snap.ID, tier)
+		}
 		switch path {
 		case "/":
 			link(snap.ID, "/a", "/e", "/f", "/h")
@@ -277,5 +288,45 @@ func TestACancelledCheckIsFinalizedInBatchesSkippingEveryPendingFetch(t *testing
 	}
 	if got := s.pageStates(); got["/a"] != "active 1" || got["/d"] != "active 2" {
 		t.Errorf("orphan streaks changed in a cancelled Check: /a %q, /d %q", got["/a"], got["/d"])
+	}
+}
+
+// The Diff tiers a Report stores are the Check's Diffs counted directly,
+// however many batches FinalizeCheck takes. Every Diff counts, including that
+// of a Page ignored while the Check ran (ADR 0008).
+func TestFinalizingInBatchesStoresTheCheckDiffTiersAndSeedFailure(t *testing.T) {
+	for _, batch := range []int{1, 2, 100} {
+		for _, seed := range []struct {
+			name, set string
+			failed    bool
+		}{
+			{"snapshot", ``, false},
+			{"failure", `outcome = 'failure', failure_kind = 'timeout'`, true},
+			{"skipped by robots", `outcome = 'skipped', skip_reason = 'robots_disallowed'`, true},
+			{"skipped by cancel", `outcome = 'skipped', skip_reason = 'cancelled'`, false},
+		} {
+			s := newFinalizeScenario(t, batch)
+			ctx := context.Background()
+			if _, err := s.pool.Exec(ctx, `UPDATE pages SET state = 'ignored' WHERE id = $1`, s.pages["/c"].ID); err != nil {
+				t.Fatal(err)
+			}
+			if seed.set != "" {
+				if _, err := s.pool.Exec(ctx, `UPDATE fetches SET `+seed.set+` WHERE check_id = $1 AND page_id = $2`, s.checkID, s.pages["/"].ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.finalize()
+			c, err := s.q.GetCheck(ctx, s.checkID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := []int32{c.CountDiffCritical, c.CountDiffSeo, c.CountDiffHeaders, c.CountDiffBody, c.CountDiffEmpty}
+			if want := []int32{1, 1, 1, 1, 3}; !slices.Equal(got, want) {
+				t.Errorf("batch %d, seed %s: critical, seo, headers, body, empty = %v, want %v", batch, seed.name, got, want)
+			}
+			if c.SeedFailed != seed.failed {
+				t.Errorf("batch %d, seed %s: seed_failed = %v, want %v", batch, seed.name, c.SeedFailed, seed.failed)
+			}
+		}
 	}
 }
