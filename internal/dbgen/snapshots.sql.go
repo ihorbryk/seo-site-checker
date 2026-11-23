@@ -234,9 +234,10 @@ WITH hit AS MATERIALIZED (
     WHERE d.check_id = $3 AND d.tier = $4::text AND d.tier <> 'empty'
 )
 SELECT hit.snapshot_id FROM hit
-JOIN snapshots s ON s.id = hit.snapshot_id
-JOIN pages p ON p.id = s.page_id
-ORDER BY p.url
+CROSS JOIN LATERAL (
+    SELECT p.url FROM snapshots s JOIN pages p ON p.id = s.page_id WHERE s.id = hit.snapshot_id OFFSET 0
+) u
+ORDER BY u.url
 LIMIT $2 OFFSET $1
 `
 
@@ -248,7 +249,9 @@ type ListChangedSnapshotIDsSparseParams struct {
 }
 
 // The same page for a tier that is sparse: its rows come from diffs_check_tier_idx
-// (which holds no empty Diffs) and only those are sorted.
+// (which holds no empty Diffs) and only those are sorted. The lateral lookup
+// (OFFSET 0) keeps the planner from joining the Pages in bulk on a stale
+// estimate of how many rows the index holds.
 func (q *Queries) ListChangedSnapshotIDsSparse(ctx context.Context, arg ListChangedSnapshotIDsSparseParams) ([]int64, error) {
 	rows, err := q.db.Query(ctx, listChangedSnapshotIDsSparse,
 		arg.RowOffset,

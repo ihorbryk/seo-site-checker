@@ -996,7 +996,7 @@ WITH hit AS MATERIALIZED (
     SELECT f.page_id, f.failure_kind, f.message FROM fetches f
     WHERE f.check_id = $1 AND f.outcome = 'failure'
 )
-SELECT p.url, hit.failure_kind, hit.message,
+SELECT u.url, hit.failure_kind, hit.message,
     EXISTS (
         SELECT 1 FROM fetches pf
         WHERE pf.page_id = hit.page_id AND pf.outcome = 'failure'
@@ -1006,8 +1006,8 @@ SELECT p.url, hit.failure_kind, hit.message,
                 AND c2.state IN ('finished', 'cancelled')
               ORDER BY c2.id DESC LIMIT 1)
     ) AS also_failed_previously
-FROM hit JOIN pages p ON p.id = hit.page_id
-ORDER BY p.url
+FROM hit CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url
 LIMIT $3 OFFSET $2
 `
 
@@ -1144,8 +1144,9 @@ WITH hit AS MATERIALIZED (
     SELECT e.page_id, e.kind FROM page_events e
     WHERE e.check_id = $3 AND e.kind = ANY($4::text[])
 )
-SELECT p.url, hit.kind FROM hit JOIN pages p ON p.id = hit.page_id
-ORDER BY p.url, hit.kind
+SELECT u.url, hit.kind FROM hit
+CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url, hit.kind
 LIMIT $2 OFFSET $1
 `
 
@@ -1285,8 +1286,9 @@ WITH hit AS MATERIALIZED (
     SELECT f.page_id, f.skip_reason FROM fetches f
     WHERE f.check_id = $3 AND f.outcome = 'skipped'
 )
-SELECT p.url, hit.skip_reason FROM hit JOIN pages p ON p.id = hit.page_id
-ORDER BY p.url
+SELECT u.url, hit.skip_reason FROM hit
+CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url
 LIMIT $2 OFFSET $1
 `
 
