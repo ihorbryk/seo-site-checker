@@ -13,26 +13,27 @@ import (
 )
 
 const addManualPage = `-- name: AddManualPage :one
-INSERT INTO pages (project_id, url, origin)
-VALUES ($1, $2, 'manual')
+INSERT INTO pages (project_id, url, origin, excluded)
+VALUES ($1, $2, 'manual', $3)
 ON CONFLICT (project_id, url) DO UPDATE SET
     origin = CASE WHEN pages.origin = 'seed' THEN 'seed' ELSE 'manual' END,
     state = 'active',
     orphan_streak = 0
 WHERE pages.state <> 'ignored'
-RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id
+RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id, excluded
 `
 
 type AddManualPageParams struct {
 	ProjectID int64
 	Url       string
+	Excluded  bool
 }
 
 // Adds the Page by hand. An existing discovered or retired Page becomes a
 // manual, active one (never retired again); an ignored Page is left alone
 // (no row returned): the user restores it explicitly.
 func (q *Queries) AddManualPage(ctx context.Context, arg AddManualPageParams) (Page, error) {
-	row := q.db.QueryRow(ctx, addManualPage, arg.ProjectID, arg.Url)
+	row := q.db.QueryRow(ctx, addManualPage, arg.ProjectID, arg.Url, arg.Excluded)
 	var i Page
 	err := row.Scan(
 		&i.ID,
@@ -43,6 +44,7 @@ func (q *Queries) AddManualPage(ctx context.Context, arg AddManualPageParams) (P
 		&i.OrphanStreak,
 		&i.CreatedAt,
 		&i.ReactivatedCheckID,
+		&i.Excluded,
 	)
 	return i, err
 }
@@ -58,8 +60,43 @@ func (q *Queries) CountPageHistory(ctx context.Context, pageID int64) (int64, er
 	return column_1, err
 }
 
+const countPagePool = `-- name: CountPagePool :one
+SELECT count(*)::bigint AS total,
+    (count(*) FILTER (WHERE state = 'active' AND NOT excluded))::bigint AS active,
+    (count(*) FILTER (WHERE state = 'active' AND NOT excluded AND orphan_streak > 0))::bigint AS orphaned,
+    (count(*) FILTER (WHERE state = 'retired'))::bigint AS retired,
+    (count(*) FILTER (WHERE state = 'ignored'))::bigint AS ignored,
+    (count(*) FILTER (WHERE state = 'active' AND excluded))::bigint AS excluded
+FROM pages WHERE project_id = $1
+`
+
+type CountPagePoolRow struct {
+	Total    int64
+	Active   int64
+	Orphaned int64
+	Retired  int64
+	Ignored  int64
+	Excluded int64
+}
+
+// The six Page pool filter counts in one aggregate over the Project's Pages.
+// Each condition repeats the precedence of web.poolState; a test pins them.
+func (q *Queries) CountPagePool(ctx context.Context, projectID int64) (CountPagePoolRow, error) {
+	row := q.db.QueryRow(ctx, countPagePool, projectID)
+	var i CountPagePoolRow
+	err := row.Scan(
+		&i.Total,
+		&i.Active,
+		&i.Orphaned,
+		&i.Retired,
+		&i.Ignored,
+		&i.Excluded,
+	)
+	return i, err
+}
+
 const getPage = `-- name: GetPage :one
-SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pg.reactivated_check_id, pr.domain, pr.exclude_patterns,
+SELECT pg.id, pg.project_id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.created_at, pg.reactivated_check_id, pg.excluded, pr.domain,
     COALESCE((SELECT c.number FROM fetches f JOIN checks c ON c.id = f.check_id
               WHERE f.page_id = pg.id ORDER BY f.check_id LIMIT 1), 0)::bigint AS first_check_number
 FROM pages pg JOIN projects pr ON pr.id = pg.project_id
@@ -75,8 +112,8 @@ type GetPageRow struct {
 	OrphanStreak       int32
 	CreatedAt          time.Time
 	ReactivatedCheckID pgtype.Int8
+	Excluded           bool
 	Domain             string
-	ExcludePatterns    []string
 	FirstCheckNumber   int64
 }
 
@@ -92,8 +129,8 @@ func (q *Queries) GetPage(ctx context.Context, id int64) (GetPageRow, error) {
 		&i.OrphanStreak,
 		&i.CreatedAt,
 		&i.ReactivatedCheckID,
+		&i.Excluded,
 		&i.Domain,
-		&i.ExcludePatterns,
 		&i.FirstCheckNumber,
 	)
 	return i, err
@@ -110,6 +147,50 @@ func (q *Queries) IgnorePage(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const listExcludeBatch = `-- name: ListExcludeBatch :many
+SELECT id, url, origin, excluded FROM pages
+WHERE project_id = $1 AND id > $2
+ORDER BY id LIMIT $3
+`
+
+type ListExcludeBatchParams struct {
+	ProjectID int64
+	AfterID   int64
+	BatchSize int32
+}
+
+type ListExcludeBatchRow struct {
+	ID       int64
+	Url      string
+	Origin   string
+	Excluded bool
+}
+
+func (q *Queries) ListExcludeBatch(ctx context.Context, arg ListExcludeBatchParams) ([]ListExcludeBatchRow, error) {
+	rows, err := q.db.Query(ctx, listExcludeBatch, arg.ProjectID, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExcludeBatchRow
+	for rows.Next() {
+		var i ListExcludeBatchRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.Origin,
+			&i.Excluded,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPageHistory = `-- name: ListPageHistory :many
@@ -195,8 +276,196 @@ func (q *Queries) ListPageHistory(ctx context.Context, arg ListPageHistoryParams
 	return items, nil
 }
 
+const listPagePoolActive = `-- name: ListPagePoolActive :many
+SELECT id FROM pages WHERE project_id = $1 AND state = 'active' AND NOT excluded
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolActiveParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+func (q *Queries) ListPagePoolActive(ctx context.Context, arg ListPagePoolActiveParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolActive, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolAll = `-- name: ListPagePoolAll :many
+SELECT id FROM pages WHERE project_id = $1
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolAllParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+// One page of Page ids per Page pool filter, in URL order. Each filter is its
+// own query so its WHERE matches a partial index (pages_pool_*_idx).
+func (q *Queries) ListPagePoolAll(ctx context.Context, arg ListPagePoolAllParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolAll, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolExcluded = `-- name: ListPagePoolExcluded :many
+SELECT id FROM pages WHERE project_id = $1 AND state = 'active' AND excluded
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolExcludedParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+func (q *Queries) ListPagePoolExcluded(ctx context.Context, arg ListPagePoolExcludedParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolExcluded, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolIgnored = `-- name: ListPagePoolIgnored :many
+SELECT id FROM pages WHERE project_id = $1 AND state = 'ignored'
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolIgnoredParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+func (q *Queries) ListPagePoolIgnored(ctx context.Context, arg ListPagePoolIgnoredParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolIgnored, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolOrphaned = `-- name: ListPagePoolOrphaned :many
+SELECT id FROM pages WHERE project_id = $1 AND state = 'active' AND NOT excluded AND orphan_streak > 0
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolOrphanedParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+func (q *Queries) ListPagePoolOrphaned(ctx context.Context, arg ListPagePoolOrphanedParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolOrphaned, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPagePoolRetired = `-- name: ListPagePoolRetired :many
+SELECT id FROM pages WHERE project_id = $1 AND state = 'retired'
+ORDER BY url LIMIT $3 OFFSET $2
+`
+
+type ListPagePoolRetiredParams struct {
+	ProjectID int64
+	RowOffset int32
+	RowLimit  int32
+}
+
+func (q *Queries) ListPagePoolRetired(ctx context.Context, arg ListPagePoolRetiredParams) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPagePoolRetired, arg.ProjectID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPagePoolRows = `-- name: ListPagePoolRows :many
-SELECT pg.id, pg.url, pg.state, pg.origin, pg.orphan_streak,
+SELECT pg.id, pg.url, pg.state, pg.origin, pg.orphan_streak, pg.excluded,
     COALESCE(last.status, 0)::int AS last_status,
     COALESCE(changed.snapshot_id, 0)::bigint AS last_changed_snapshot_id,
     COALESCE(changed.fetched_at, 'epoch'::timestamptz)::timestamptz AS last_changed_at,
@@ -222,6 +491,7 @@ type ListPagePoolRowsRow struct {
 	State                 string
 	Origin                string
 	OrphanStreak          int32
+	Excluded              bool
 	LastStatus            int32
 	LastChangedSnapshotID int64
 	LastChangedAt         time.Time
@@ -247,6 +517,7 @@ func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPage
 			&i.State,
 			&i.Origin,
 			&i.OrphanStreak,
+			&i.Excluded,
 			&i.LastStatus,
 			&i.LastChangedSnapshotID,
 			&i.LastChangedAt,
@@ -263,49 +534,8 @@ func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPage
 	return items, nil
 }
 
-const listPagePoolStates = `-- name: ListPagePoolStates :many
-SELECT id, url, state, origin, orphan_streak FROM pages
-WHERE project_id = $1 ORDER BY url
-`
-
-type ListPagePoolStatesRow struct {
-	ID           int64
-	Url          string
-	State        string
-	Origin       string
-	OrphanStreak int32
-}
-
-// What the Page pool tab needs to classify, count and filter every Page
-// (web.poolState); the costly columns come from ListPagePoolRows for one page.
-func (q *Queries) ListPagePoolStates(ctx context.Context, projectID int64) ([]ListPagePoolStatesRow, error) {
-	rows, err := q.db.Query(ctx, listPagePoolStates, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPagePoolStatesRow
-	for rows.Next() {
-		var i ListPagePoolStatesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Url,
-			&i.State,
-			&i.Origin,
-			&i.OrphanStreak,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProjectSummaries = `-- name: ListProjectSummaries :many
-SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id, p.last_check_number,
+SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id, p.last_check_number, p.exclude_gen, p.exclude_cursor,
     (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages,
     COALESCE(lc.number, 0)::bigint AS last_check_number,
     COALESCE(lc.state, '')::text AS last_check_state,
@@ -335,6 +565,8 @@ type ListProjectSummariesRow struct {
 	CreatedAt         time.Time
 	OwnerID           int64
 	LastCheckNumber   int64
+	ExcludeGen        int64
+	ExcludeCursor     int64
 	ActivePages       int64
 	LastCheckNumber_2 int64
 	LastCheckState    string
@@ -370,6 +602,8 @@ func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]Li
 			&i.CreatedAt,
 			&i.OwnerID,
 			&i.LastCheckNumber,
+			&i.ExcludeGen,
+			&i.ExcludeCursor,
 			&i.ActivePages,
 			&i.LastCheckNumber_2,
 			&i.LastCheckState,
@@ -390,6 +624,46 @@ func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]Li
 	return items, nil
 }
 
+const lockProjectForExclusion = `-- name: LockProjectForExclusion :one
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor FROM projects WHERE id = $1 FOR NO KEY UPDATE
+`
+
+func (q *Queries) LockProjectForExclusion(ctx context.Context, id int64) (Project, error) {
+	row := q.db.QueryRow(ctx, lockProjectForExclusion, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Domain,
+		&i.Schedule,
+		&i.UserAgent,
+		&i.TimeoutS,
+		&i.MaxParallel,
+		&i.RespectRobots,
+		&i.CustomHeaders,
+		&i.ExcludePatterns,
+		&i.CreatedAt,
+		&i.OwnerID,
+		&i.LastCheckNumber,
+		&i.ExcludeGen,
+		&i.ExcludeCursor,
+	)
+	return i, err
+}
+
+const lockProjectShared = `-- name: LockProjectShared :one
+SELECT exclude_patterns FROM projects WHERE id = $1 FOR SHARE
+`
+
+// Read by every insert of a Page, to the end of its transaction, so a save of
+// the exclude patterns (which updates the row) waits for it and no Page keeps
+// an answer from older patterns (ADR 0009).
+func (q *Queries) LockProjectShared(ctx context.Context, id int64) ([]string, error) {
+	row := q.db.QueryRow(ctx, lockProjectShared, id)
+	var exclude_patterns []string
+	err := row.Scan(&exclude_patterns)
+	return exclude_patterns, err
+}
+
 const restorePage = `-- name: RestorePage :execrows
 UPDATE pages SET state = 'active', orphan_streak = 0 WHERE id = $1 AND state = 'ignored'
 `
@@ -400,4 +674,49 @@ func (q *Queries) RestorePage(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setExcludeCursor = `-- name: SetExcludeCursor :exec
+UPDATE projects SET exclude_cursor = $2 WHERE id = $1
+`
+
+type SetExcludeCursorParams struct {
+	ID            int64
+	ExcludeCursor int64
+}
+
+func (q *Queries) SetExcludeCursor(ctx context.Context, arg SetExcludeCursorParams) error {
+	_, err := q.db.Exec(ctx, setExcludeCursor, arg.ID, arg.ExcludeCursor)
+	return err
+}
+
+const setPagesExcluded = `-- name: SetPagesExcluded :exec
+UPDATE pages SET excluded = f.excluded
+FROM unnest($1::bigint[]) WITH ORDINALITY AS i(id, n)
+JOIN unnest($2::boolean[]) WITH ORDINALITY AS f(excluded, n) USING (n)
+WHERE pages.id = i.id AND pages.excluded <> f.excluded
+`
+
+type SetPagesExcludedParams struct {
+	PageIds []int64
+	Flags   []bool
+}
+
+// Writes only the answers that change.
+func (q *Queries) SetPagesExcluded(ctx context.Context, arg SetPagesExcludedParams) error {
+	_, err := q.db.Exec(ctx, setPagesExcluded, arg.PageIds, arg.Flags)
+	return err
+}
+
+const startExcludeRecompute = `-- name: StartExcludeRecompute :one
+UPDATE projects SET exclude_gen = exclude_gen + 1, exclude_cursor = 0
+WHERE id = $1 RETURNING exclude_gen
+`
+
+// A new generation, from the first Page on. Chains of older generations stop.
+func (q *Queries) StartExcludeRecompute(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, startExcludeRecompute, id)
+	var exclude_gen int64
+	err := row.Scan(&exclude_gen)
+	return exclude_gen, err
 }

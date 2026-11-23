@@ -170,9 +170,12 @@ LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: UpsertDiscoveredPages :execrows
 -- Adds the URLs as discovered Pages of the Project, leaving existing ones alone;
--- returns how many it added.
-INSERT INTO pages (project_id, url, origin)
-SELECT sqlc.arg(project_id), u, 'discovered' FROM unnest(sqlc.arg(urls)::text[]) AS u
+-- returns how many it added. excluded[i] is the answer for urls[i] under the
+-- Project's current patterns.
+INSERT INTO pages (project_id, url, origin, excluded)
+SELECT sqlc.arg(project_id), u.url, 'discovered', f.excluded
+FROM unnest(sqlc.arg(urls)::text[]) WITH ORDINALITY AS u(url, n)
+JOIN unnest(sqlc.arg(excluded)::boolean[]) WITH ORDINALITY AS f(excluded, n) USING (n)
 ON CONFLICT (project_id, url) DO NOTHING;
 
 -- name: PageIDsByURL :many

@@ -159,6 +159,7 @@ type Page struct {
 	OrphanStreak       int32
 	CreatedAt          time.Time
 	ReactivatedCheckID pgtype.Int8
+	Excluded           bool
 }
 
 type PageEvent struct {
@@ -180,6 +181,8 @@ type Project struct {
 	CreatedAt       time.Time
 	OwnerID         int64
 	LastCheckNumber int64
+	ExcludeGen      int64
+	ExcludeCursor   int64
 }
 
 type RiverJob struct {

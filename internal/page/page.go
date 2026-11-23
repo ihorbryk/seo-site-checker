@@ -33,7 +33,8 @@ const RetireAfter = 3
 
 // Excluded reports whether a Page of the given origin matches one of the
 // exclude patterns. The seed Page is never excluded, whatever the patterns say.
-// Exclusion is computed, never stored.
+// This is the only place a pattern is matched: the answer is stored on the
+// Page when it is added and by the recompute job (ADR 0009).
 func Excluded(patterns []string, origin, pageURL string) bool {
 	return origin != OriginSeed && exclude.Excluded(patterns, pageURL)
 }

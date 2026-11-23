@@ -121,7 +121,7 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		s.settingsScreen(w, r, p, viewOfForm(r.PostForm), errs, false)
 		return
 	}
-	if err := project.SaveRequestSettings(r.Context(), s.q, id, rs); err != nil {
+	if err := project.SaveRequestSettings(r.Context(), s.pool, s.river, id, rs); err != nil {
 		s.fail(w, r, err)
 		return
 	}

@@ -206,9 +206,15 @@ func Page(t testing.TB, db dbgen.DBTX, project dbgen.Project, path string, opts 
 	for _, o := range opts {
 		o(&params)
 	}
+	params.Excluded = pageExcluded(project, params.Origin, params.Url)
 	p, err := dbgen.New(db).CreatePage(context.Background(), params)
 	if err != nil {
 		t.Fatalf("testfixtures: page: %v", err)
 	}
 	return p
+}
+
+// pageExcluded is the stored answer of a new Page under the Project's patterns.
+func pageExcluded(project dbgen.Project, origin, url string) bool {
+	return page.Excluded(project.ExcludePatterns, origin, url)
 }
