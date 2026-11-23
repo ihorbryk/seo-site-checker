@@ -24,6 +24,7 @@ import (
 // planRig is a queued Check whose StartCheck jobs the test works one by one.
 type planRig struct {
 	t       *testing.T
+	d       *deps
 	pool    *pgxpool.Pool
 	q       *dbgen.Queries
 	rc      *river.Client[pgx.Tx]
@@ -64,7 +65,7 @@ func newPlanRig(t *testing.T, n, batch int, setup func(*pgxpool.Pool, dbgen.Proj
 	driver := riverpgxv5.New(pool)
 	cfg := func() *river.Config { return &river.Config{Logger: log} }
 	return &planRig{
-		t: t, pool: pool, q: d.q, rc: rc, tx: newPoolTx(t, pool), project: p, checkID: c.ID,
+		t: t, d: d, pool: pool, q: d.q, rc: rc, tx: newPoolTx(t, pool), project: p, checkID: c.ID,
 		startW: rivertest.NewWorker[check.StartCheckArgs, pgx.Tx](t, driver, cfg(), &startWorker{deps: d}),
 		finW:   rivertest.NewWorker[check.FinalizeCheckArgs, pgx.Tx](t, driver, cfg(), &finalizeWorker{deps: d}),
 	}

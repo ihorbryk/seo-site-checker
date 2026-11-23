@@ -195,9 +195,6 @@ SELECT sqlc.arg(check_id), u, sqlc.arg(reason)
 FROM unnest(sqlc.arg(urls)::text[]) AS u
 ON CONFLICT DO NOTHING;
 
--- name: CountPendingFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND state = 'pending';
-
 -- name: CountDroppedURLs :one
 -- URLs the Check dropped under the sanity limits.
 SELECT count(*)::bigint FROM dropped_urls WHERE check_id = $1;

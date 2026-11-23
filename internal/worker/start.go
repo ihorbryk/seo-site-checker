@@ -13,7 +13,6 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/page"
 	projectrules "github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 )
 
@@ -200,26 +199,22 @@ func (w *startWorker) planBatch(ctx context.Context, rc *river.Client[pgx.Tx], t
 // startLanes ends planning: it starts up to max_parallel lanes, each with a
 // Fetch already claimed under its job id, and marks the Check running.
 func startLanes(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbgen.Queries, c dbgen.Check, settings check.Settings) error {
-	pending, err := q.CountPendingFetches(ctx, c.ID)
-	if err != nil {
-		return err
-	}
-	lanes := min(int64(settings.MaxParallel), pending)
-	for range lanes {
-		laneJob, err := rc.InsertTx(ctx, tx, check.LaneArgs{CheckID: c.ID, FetchTimeoutS: settings.TimeoutS}, nil)
+	// At most max_parallel claims: the pool may hold millions of pending Fetches.
+	var lanes int32
+	for lanes < int32(settings.MaxParallel) {
+		ok, err := startLane(ctx, rc, tx, q, c.ID, check.LaneArgs{CheckID: c.ID, FetchTimeoutS: settings.TimeoutS})
 		if err != nil {
 			return err
 		}
-		if _, err := q.ClaimNextFetch(ctx, dbgen.ClaimNextFetchParams{
-			JobID: pgtype.Int8{Int64: laneJob.Job.ID, Valid: true}, CheckID: c.ID,
-		}); err != nil {
-			return err
+		if !ok {
+			break
 		}
+		lanes++
 	}
 	if lanes == 0 { // nothing to fetch: finish straight away
 		if _, err := rc.InsertTx(ctx, tx, check.FinalizeCheckArgs{CheckID: c.ID}, nil); err != nil {
 			return err
 		}
 	}
-	return q.MarkCheckRunning(ctx, dbgen.MarkCheckRunningParams{ID: c.ID, Lanes: int32(lanes)})
+	return q.MarkCheckRunning(ctx, dbgen.MarkCheckRunningParams{ID: c.ID, Lanes: lanes})
 }
