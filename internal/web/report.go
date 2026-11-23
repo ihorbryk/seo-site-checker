@@ -24,16 +24,17 @@ import (
 // in the Report template's data. Skipped is only shown with ?show=skipped.
 var reportSections = []reportSection{
 	{Key: "Changed", ID: "changed", Template: "changedSection"},
-	{Key: "New", ID: "new", Template: "eventsSection", Kinds: []string{page.EventNew, page.EventReactivated}}, // pageliterals:ok HTML id
-	{Key: "Vanished", ID: "vanished", Template: "eventsSection", Kinds: []string{page.EventVanished}},         // pageliterals:ok HTML id
-	{Key: "Retired", ID: "retired", Template: "eventsSection", Kinds: []string{page.EventRetired}},            // pageliterals:ok HTML id
+	{Key: "New", ID: "new", Template: "eventsSection", Kinds: []string{page.EventNew, page.EventReactivated}, Count: func(c dbgen.Check) int32 { return c.CountNew }}, // pageliterals:ok HTML id
+	{Key: "Vanished", ID: "vanished", Template: "eventsSection", Kinds: []string{page.EventVanished}, Count: func(c dbgen.Check) int32 { return c.CountVanished }},    // pageliterals:ok HTML id
+	{Key: "Retired", ID: "retired", Template: "eventsSection", Kinds: []string{page.EventRetired}, Count: func(c dbgen.Check) int32 { return c.CountRetired }},        // pageliterals:ok HTML id
 	{Key: "Failures", ID: "failures", Template: "failuresSection"},
 	{Key: "Skipped", ID: "skipped", Template: "skippedSection"},
 }
 
 type reportSection struct {
 	Key, ID, Template string
-	Kinds             []string // Page event sections only
+	Kinds             []string                // Page event sections only
+	Count             func(dbgen.Check) int32 // Page event sections only: the total stored on the Check
 }
 
 // sectionView is what a section template renders: one page of its rows.
@@ -173,7 +174,7 @@ func (s *server) buildSection(rep *report, sec reportSection) (sectionView, erro
 		limit, offset := page()
 		rows, err = s.skippedRows(rep, limit, offset)
 	default:
-		total = map[string]int64{"new": int64(c.CountNew), "vanished": int64(c.CountVanished), "retired": int64(c.CountRetired)}[sec.ID]
+		total = int64(sec.Count(c))
 		limit, offset := page()
 		rows, err = s.eventRows(rep, sec, total, limit, offset)
 	}
