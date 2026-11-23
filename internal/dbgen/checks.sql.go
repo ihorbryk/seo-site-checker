@@ -1655,7 +1655,7 @@ func (q *Queries) SetPlanCursor(ctx context.Context, arg SetPlanCursorParams) er
 	return err
 }
 
-const skipPendingFetches = `-- name: SkipPendingFetches :exec
+const skipPendingFetches = `-- name: SkipPendingFetches :execrows
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
 WHERE check_id = $1 AND page_id > $2 AND page_id <= $3
   AND state = 'pending'
@@ -1667,9 +1667,13 @@ type SkipPendingFetchesParams struct {
 	UptoID  int64
 }
 
-func (q *Queries) SkipPendingFetches(ctx context.Context, arg SkipPendingFetchesParams) error {
-	_, err := q.db.Exec(ctx, skipPendingFetches, arg.CheckID, arg.AfterID, arg.UptoID)
-	return err
+// Returns how many it skipped, for the Check's progress counters.
+func (q *Queries) SkipPendingFetches(ctx context.Context, arg SkipPendingFetchesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, skipPendingFetches, arg.CheckID, arg.AfterID, arg.UptoID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :execrows

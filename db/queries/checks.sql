@@ -354,7 +354,8 @@ OFFSET sqlc.arg(batch_size)::bigint - 1 LIMIT 1;
 SELECT f.outcome FROM fetches f JOIN pages pg ON pg.id = f.page_id
 WHERE f.check_id = $1 AND pg.origin = 'seed';
 
--- name: SkipPendingFetches :exec
+-- name: SkipPendingFetches :execrows
+-- Returns how many it skipped, for the Check's progress counters.
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = 'cancelled'
 WHERE check_id = sqlc.arg(check_id) AND page_id > sqlc.arg(after_id) AND page_id <= sqlc.arg(upto_id)
   AND state = 'pending';

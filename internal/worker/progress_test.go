@@ -119,6 +119,26 @@ func TestProgressCountersEqualTheRowsOnACancelledCheck(t *testing.T) {
 	r.requireProgressMatchesRows()
 }
 
+// FinalizeCheck skips the pending Fetches of a cancelling Check: its counters
+// count them in the same transaction, so they never lag the rows.
+func TestProgressCountersEqualTheRowsAfterFinalizingACancelledCheck(t *testing.T) {
+	r := newRig(t, progressSite(t), "/")
+	steps := 0
+	r.workLanes(func() {
+		if steps++; steps == 1 {
+			if _, err := r.q.RequestCancel(context.Background(), r.checkID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	var pending int
+	if err := r.pool.QueryRow(context.Background(), `SELECT count(*) FROM fetches WHERE check_id = $1 AND state = 'pending'`, r.checkID).Scan(&pending); err != nil || pending == 0 {
+		t.Fatalf("%d pending Fetches before FinalizeCheck (err %v); the test needs some", pending, err)
+	}
+	r.finalize()
+	r.requireProgressMatchesRows()
+}
+
 // A lane whose attempt failed before it committed leaves nothing counted; its
 // retry counts the Fetch once.
 func TestARetriedLaneCountsItsFetchOnce(t *testing.T) {

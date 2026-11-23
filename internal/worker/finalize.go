@@ -93,7 +93,13 @@ func (w *finalizeWorker) Work(ctx context.Context, job *river.Job[check.Finalize
 	case check.StateCancelling:
 		// The lanes have ended, so no Fetch is in flight. The Check saw only
 		// part of the Page pool: skip the rest and leave orphans alone.
-		if err := q.SkipPendingFetches(ctx, dbgen.SkipPendingFetchesParams{CheckID: c.ID, AfterID: after, UptoID: upto}); err != nil {
+		skipped, err := q.SkipPendingFetches(ctx, dbgen.SkipPendingFetchesParams{CheckID: c.ID, AfterID: after, UptoID: upto})
+		if err != nil {
+			return err
+		}
+		// A skipped Fetch is a done one: the progress counters count it with
+		// the rows (the lanes do the same for the Fetches they skip).
+		if err := q.AddCheckProgress(ctx, dbgen.AddCheckProgressParams{ID: c.ID, Fetched: skipped}); err != nil {
 			return err
 		}
 		end = check.StateCancelled
