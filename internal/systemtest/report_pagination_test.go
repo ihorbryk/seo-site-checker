@@ -21,8 +21,9 @@ import (
 // largeReport is an ended Check of shop.test whose Report has 120 changed
 // Pages c001…c120 (c010, c020, … critical; other even ones SEO; odd ones
 // body; every third one redirects), 30 unchanged u001…u030, changed Pages
-// that are excluded (/private/…) or ignored, 120 new Pages (the c ones, plus
-// the ignored ones, left out), 30 vanished (the u ones), 75 fetch failures
+// that are excluded (/private/…) or ignored (a Report is fixed when its Check
+// ends, so they are in it: 125 changed Pages), 122 new Pages (the c ones and
+// the ignored ones), 30 vanished (the u ones), 75 fetch failures
 // f001…f075 (also retired) and 60 skipped Pages s001…s060. It returns the Report's path.
 func largeReport(t *testing.T, s *systemtest.System) string {
 	t.Helper()
@@ -59,8 +60,8 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 		FROM fetches f JOIN pages p ON p.id = f.page_id,
 			LATERAL (SELECT p.url ~ '/c[0-9]+$' AND right(p.url, 3)::int % 3 = 0 AS redirects) r
 		WHERE f.check_id = $1 AND f.outcome = 'snapshot'`, checkID)
-	s.Exec(`INSERT INTO diffs (snapshot_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
-		SELECT sn.id, sn.id, false, false, false, tier <> 'empty', tier
+	s.Exec(`INSERT INTO diffs (snapshot_id, check_id, baseline_id, status_changed, headers_changed, seo_changed, body_changed, tier)
+		SELECT sn.id, sn.check_id, sn.id, false, false, false, tier <> 'empty', tier
 		FROM snapshots sn JOIN pages p ON p.id = sn.page_id,
 			LATERAL (SELECT CASE
 				WHEN p.url ~ '/u[0-9]+$' THEN 'empty'
@@ -72,7 +73,8 @@ func largeReport(t *testing.T, s *systemtest.System) string {
 	s.Exec(`INSERT INTO page_events (check_id, page_id, kind)
 		SELECT $1, id, CASE WHEN url ~ '/[ci][a-z]*[0-9]+$' THEN 'new' WHEN url ~ '/u[0-9]+$' THEN 'vanished' ELSE 'retired' END
 		FROM pages WHERE project_id = $2 AND url ~ '/([cuf]|ign)[0-9]+$'`, checkID, p.ID)
-	s.Exec(`UPDATE checks SET count_new = 120, count_vanished = 30, count_retired = 75, count_failures = 75, count_skipped = 60 WHERE id = $1`, checkID)
+	s.Exec(`UPDATE checks SET count_new = 122, count_vanished = 30, count_retired = 75, count_failures = 75, count_skipped = 60,
+		count_diff_critical = 17, count_diff_seo = 48, count_diff_body = 60, count_diff_empty = 30 WHERE id = $1`, checkID)
 	return s.CheckPath(checkID)
 }
 
@@ -94,7 +96,7 @@ func upTo(from, to int) []int {
 }
 
 // rankedChanged is the Changed Pages of largeReport in Report order: tier,
-// then URL.
+// then URL. The ignored and excluded Pages are critical.
 func rankedChanged() []string {
 	var critical, seo, body []int
 	for n := 1; n <= 120; n++ {
@@ -107,7 +109,8 @@ func rankedChanged() []string {
 			body = append(body, n)
 		}
 	}
-	return numbered("c", slices.Concat(critical, seo, body)...)
+	crit := slices.Concat(numbered("c", critical...), numbered("ign", 1, 2), numbered("private/x", 1, 2, 3))
+	return slices.Concat(crit, numbered("c", seo...), numbered("c", body...))
 }
 
 // cells is the text of the first cell of each data row of table.
@@ -134,7 +137,7 @@ func TestALargeReportShowsOnePageOfChangedPagesRankedByTierThenURL(t *testing.T)
 	if got := cells(d, "#changed"); !slices.Equal(got, want[:50]) {
 		t.Errorf("first page of Changed Pages = %v, want %v", got, want[:50])
 	}
-	if txt := strings.Join(strings.Fields(sectionPager(d, "changed").Text()), " "); !strings.Contains(txt, "Page 1 of 3") || !strings.Contains(txt, "Rows 1–50 of 120") {
+	if txt := strings.Join(strings.Fields(sectionPager(d, "changed").Text()), " "); !strings.Contains(txt, "Page 1 of 3") || !strings.Contains(txt, "Rows 1–50 of 125") {
 		t.Errorf("Changed pager = %q", txt)
 	}
 	if got := cells(s.Page(s.Get(path+"?changed_page=2")), "#changed"); !slices.Equal(got, want[50:100]) {
@@ -160,13 +163,12 @@ func TestReportCountsCoverTheWholeCheckOnEveryPage(t *testing.T) {
 	path := largeReport(t, s)
 	for _, q := range []string{"", "?changed_page=3", "?changed_per=500", "?changed_per=100&changed_page=2", "?new_page=2&failures_per=200", "?show=skipped&skipped_page=2"} {
 		d := s.Page(s.Get(path + q))
-		// The excluded and ignored Pages are left out of Changed.
+		// The ignored and excluded Pages are in Changed and New.
 		header := []string{text(d, ".changed"), text(d, ".unchanged"), text(d, ".new-pages"), text(d, ".vanished-count"), text(d, ".failed"), text(d, ".skipped")}
-		if want := []string{"120", "30", "120", "30", "75", "60"}; !slices.Equal(header, want) {
+		if want := []string{"125", "30", "122", "30", "75", "60"}; !slices.Equal(header, want) {
 			t.Errorf("%s: header counts %v, want %v", q, header, want)
 		}
-		// The ignored Pages' new events are left out of New Pages too.
-		for id, total := range map[string]string{"changed": "of 120", "new": "of 120", "retired": "of 75", "failures": "of 75"} {
+		for id, total := range map[string]string{"changed": "of 125", "new": "of 122", "retired": "of 75", "failures": "of 75"} {
 			if txt := sectionPager(d, id).Find(".rows").Text(); !strings.HasSuffix(txt, total) {
 				t.Errorf("%s: %s pager rows %q, want %q", q, id, txt, total)
 			}
@@ -297,8 +299,9 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	if w.Code != 200 || frag.Find("#failures-section").Length() != 1 || frag.Find("#report-header, #changed, #new").Length() != 0 {
 		t.Errorf("section fragment: status %d, body %.200s", w.Code, w.Body.String())
 	}
+	queries = withoutReadVariant(queries)
 	slices.Sort(queries)
-	if want := []string{"CountFetchFailures", "GetCheckByNumber", "GetProject", "ListFetchFailures", "ProjectOwner"}; !slices.Equal(queries, want) {
+	if want := []string{"GetCheckByNumber", "GetProject", "ListFetchFailures", "ProjectOwner"}; !slices.Equal(queries, want) {
 		t.Errorf("section request ran %v, want only %v", queries, want)
 	}
 
@@ -321,15 +324,15 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	changedHx := sectionPager(d, "changed").Find("a.next").AttrOr("hx-get", "")
 	queries = s.WebQueries(func() { w = s.GetHTMX(changedHx) })
 	ran := map[string]bool{}
-	for _, q := range queries {
+	for _, q := range withoutReadVariant(queries) {
 		ran[q] = true
 	}
 	for q := range ran {
-		if !slices.Contains([]string{"ProjectOwner", "GetCheckByNumber", "GetProject", "ListCheckDiffStates", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
+		if !slices.Contains([]string{"ProjectOwner", "GetCheckByNumber", "GetProject", "ListChangedSnapshotIDs", "ListCheckDiffRows", "CheckSnapshotRedirect"}, q) {
 			t.Errorf("Changed section request ran %s (all: %v)", q, queries)
 		}
 	}
-	if got := cells(s.Page(w), "#changed"); len(got) != 20 || !slices.Equal(got, rankedChanged()[100:]) {
+	if got := cells(s.Page(w), "#changed"); len(got) != 25 || !slices.Equal(got, rankedChanged()[100:]) {
 		t.Errorf("Changed fragment page 2 at 100 per page = %v", got)
 	}
 
@@ -337,4 +340,15 @@ func TestAReportSectionPagerSwapsOnlyThatSectionThroughHTMX(t *testing.T) {
 	if w := s.Get(hx); w.Code != 303 || w.Header().Get("Location") != path+"?"+strings.SplitN(hx, "?", 2)[1]+"#failures" {
 		t.Errorf("full load of section URL: status %d, Location %q", w.Code, w.Header().Get("Location"))
 	}
+}
+
+// withoutReadVariant names each list query by its section alone: a section is
+// read by walking the Pages (Dense) or from an index of its own rows (Sparse),
+// chosen by its stored count.
+func withoutReadVariant(queries []string) []string {
+	out := make([]string, len(queries))
+	for i, q := range queries {
+		out[i] = strings.TrimSuffix(strings.TrimSuffix(q, "Dense"), "Sparse")
+	}
+	return out
 }

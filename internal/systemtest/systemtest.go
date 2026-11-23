@@ -62,6 +62,7 @@ type settings struct {
 	web           web.Options
 	capture       bool
 	planBatchSize int
+	excludeBatch  int
 }
 
 // logBuffer is a goroutine-safe io.Writer holding the web app's log.
@@ -85,6 +86,12 @@ func InsecureCookies() Option {
 // small pool takes several batches.
 func PlanBatchSize(n int) Option {
 	return func(o *settings) { o.planBatchSize = n }
+}
+
+// ExcludeBatchSize makes the worker's ExcludeRecompute jobs recompute n Pages
+// each, so a small pool takes several batches.
+func ExcludeBatchSize(n int) Option {
+	return func(o *settings) { o.excludeBatch = n }
 }
 
 // TrustedProxyHeader starts the web app with TRUSTED_PROXY_HEADER=header.
@@ -155,6 +162,7 @@ func New(t testing.TB, opts ...Option) *System {
 		HTTPClient:        s.Network.Client(),
 		FetchPollInterval: 50 * time.Millisecond,
 		PlanBatchSize:     cfg.planBatchSize,
+		ExcludeBatchSize:  cfg.excludeBatch,
 	})
 	if err != nil {
 		t.Fatal(err)

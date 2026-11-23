@@ -10,19 +10,25 @@ import (
 )
 
 const createPage = `-- name: CreatePage :one
-INSERT INTO pages (project_id, url, origin)
-VALUES ($1, $2, $3)
-RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id
+INSERT INTO pages (project_id, url, origin, excluded)
+VALUES ($1, $2, $3, $4)
+RETURNING id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id, excluded
 `
 
 type CreatePageParams struct {
 	ProjectID int64
 	Url       string
 	Origin    string
+	Excluded  bool
 }
 
 func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, error) {
-	row := q.db.QueryRow(ctx, createPage, arg.ProjectID, arg.Url, arg.Origin)
+	row := q.db.QueryRow(ctx, createPage,
+		arg.ProjectID,
+		arg.Url,
+		arg.Origin,
+		arg.Excluded,
+	)
 	var i Page
 	err := row.Scan(
 		&i.ID,
@@ -33,6 +39,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 		&i.OrphanStreak,
 		&i.CreatedAt,
 		&i.ReactivatedCheckID,
+		&i.Excluded,
 	)
 	return i, err
 }
@@ -40,7 +47,7 @@ func (q *Queries) CreatePage(ctx context.Context, arg CreatePageParams) (Page, e
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (owner_id, domain, schedule)
 VALUES ($1, $2, $3)
-RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number
+RETURNING id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor, exclude_done_gen
 `
 
 type CreateProjectParams struct {
@@ -65,12 +72,15 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.CreatedAt,
 		&i.OwnerID,
 		&i.LastCheckNumber,
+		&i.ExcludeGen,
+		&i.ExcludeCursor,
+		&i.ExcludeDoneGen,
 	)
 	return i, err
 }
 
 const getProjectByDomain = `-- name: GetProjectByDomain :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects WHERE owner_id = $1 AND domain = $2
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor, exclude_done_gen FROM projects WHERE owner_id = $1 AND domain = $2
 `
 
 type GetProjectByDomainParams struct {
@@ -94,12 +104,15 @@ func (q *Queries) GetProjectByDomain(ctx context.Context, arg GetProjectByDomain
 		&i.CreatedAt,
 		&i.OwnerID,
 		&i.LastCheckNumber,
+		&i.ExcludeGen,
+		&i.ExcludeCursor,
+		&i.ExcludeDoneGen,
 	)
 	return i, err
 }
 
 const listPagesByProject = `-- name: ListPagesByProject :many
-SELECT id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id FROM pages WHERE project_id = $1 ORDER BY url
+SELECT id, project_id, url, state, origin, orphan_streak, created_at, reactivated_check_id, excluded FROM pages WHERE project_id = $1 ORDER BY url
 `
 
 func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Page, error) {
@@ -120,6 +133,7 @@ func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Pa
 			&i.OrphanStreak,
 			&i.CreatedAt,
 			&i.ReactivatedCheckID,
+			&i.Excluded,
 		); err != nil {
 			return nil, err
 		}
@@ -132,7 +146,7 @@ func (q *Queries) ListPagesByProject(ctx context.Context, projectID int64) ([]Pa
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects ORDER BY domain
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor, exclude_done_gen FROM projects ORDER BY domain
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -157,6 +171,9 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.CreatedAt,
 			&i.OwnerID,
 			&i.LastCheckNumber,
+			&i.ExcludeGen,
+			&i.ExcludeCursor,
+			&i.ExcludeDoneGen,
 		); err != nil {
 			return nil, err
 		}

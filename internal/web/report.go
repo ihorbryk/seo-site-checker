@@ -24,16 +24,17 @@ import (
 // in the Report template's data. Skipped is only shown with ?show=skipped.
 var reportSections = []reportSection{
 	{Key: "Changed", ID: "changed", Template: "changedSection"},
-	{Key: "New", ID: "new", Template: "eventsSection", Kinds: []string{page.EventNew, page.EventReactivated}}, // pageliterals:ok HTML id
-	{Key: "Vanished", ID: "vanished", Template: "eventsSection", Kinds: []string{page.EventVanished}},         // pageliterals:ok HTML id
-	{Key: "Retired", ID: "retired", Template: "eventsSection", Kinds: []string{page.EventRetired}},            // pageliterals:ok HTML id
+	{Key: "New", ID: "new", Template: "eventsSection", Kinds: []string{page.EventNew, page.EventReactivated}, Count: func(c dbgen.Check) int32 { return c.CountNew }}, // pageliterals:ok HTML id
+	{Key: "Vanished", ID: "vanished", Template: "eventsSection", Kinds: []string{page.EventVanished}, Count: func(c dbgen.Check) int32 { return c.CountVanished }},    // pageliterals:ok HTML id
+	{Key: "Retired", ID: "retired", Template: "eventsSection", Kinds: []string{page.EventRetired}, Count: func(c dbgen.Check) int32 { return c.CountRetired }},        // pageliterals:ok HTML id
 	{Key: "Failures", ID: "failures", Template: "failuresSection"},
 	{Key: "Skipped", ID: "skipped", Template: "skippedSection"},
 }
 
 type reportSection struct {
 	Key, ID, Template string
-	Kinds             []string // Page event sections only
+	Kinds             []string                // Page event sections only
+	Count             func(dbgen.Check) int32 // Page event sections only: the total stored on the Check
 }
 
 // sectionView is what a section template renders: one page of its rows.
@@ -49,7 +50,6 @@ type report struct {
 	check dbgen.Check
 	proj  dbgen.Project
 	url   *url.URL // the Report's URL with the request's query
-	diffs *diffIndex
 }
 
 func (s *server) newReport(r *http.Request, c dbgen.Check, p dbgen.Project) *report {
@@ -85,11 +85,9 @@ func (s *server) buildReport(r *http.Request, c dbgen.Check, p dbgen.Project) (m
 			return nil, err
 		}
 	}
-	idx, err := s.diffIndex(rep)
-	if err != nil {
-		return nil, err
-	}
-	data["ChangedCount"], data["UnchangedCount"] = len(idx.changed), idx.unchanged
+	counts := rep.counts()
+	data["ChangedCount"] = int(counts.changed())
+	data["UnchangedCount"] = int(counts.Unchanged)
 	return data, nil
 }
 
@@ -128,53 +126,127 @@ func (s *server) reportSectionPage(w http.ResponseWriter, r *http.Request) {
 	s.fragment(w, r, sec.Template, view)
 }
 
-// buildSection loads one page of a Report section: its total first, then
-// only the rows on the current page.
+// denseFactor decides how a section is read. A section of n rows next to a
+// pool of Fetches is dense when n*denseFactor >= pool: it is read by walking
+// the Project's Pages in URL order and probing each for a row of the Check,
+// which takes about pool/n probes per row. A sparser section is read from an
+// index of its own rows and sorted, which takes at most pool/denseFactor rows.
+// Either way the first page of a 2M-Page Check costs about 10,000 index
+// probes or less (ADR 0010).
+const denseFactor = 100
+
+// reportCounts is what a Report reads from the counts stored on its Check
+// when it ended (ADR 0008, 0010). Nothing else in the web app derives a Report
+// number from the Check's columns.
+type reportCounts struct {
+	Critical, SEO, Headers, Body int64 // Diffs by tier
+	Unchanged                    int64
+	pool                         int64 // the Pages the dense walk steps over
+}
+
+func (rep *report) counts() reportCounts {
+	c := rep.check
+	pool := int64(c.CountPages)
+	if pool == 0 {
+		// A Check that ended before count_pages was stored: its own Fetches.
+		pool = int64(c.CountSnapshots) + int64(c.CountFailures) + int64(c.CountSkipped)
+	}
+	return reportCounts{
+		Critical: int64(c.CountDiffCritical), SEO: int64(c.CountDiffSeo),
+		Headers: int64(c.CountDiffHeaders), Body: int64(c.CountDiffBody),
+		Unchanged: int64(c.CountDiffEmpty), pool: pool,
+	}
+}
+
+// changed is the Changed Pages total: every tier but empty.
+func (rc reportCounts) changed() int64 { return rc.Critical + rc.SEO + rc.Headers + rc.Body }
+
+// dense reports whether a section of n rows is read by walking the Pages. The
+// pool is the number of Pages the walk steps over, stored when the Check
+// ended: retired, ignored and excluded Pages get no Fetch but are walked too.
+func (rc reportCounts) dense(n int64) bool { return n*denseFactor >= rc.pool }
+
+func (rep *report) dense(n int64) bool { return rep.counts().dense(n) }
+
+// buildSection loads one page of a Report section: its total from the counts
+// stored on the Check (ADR 0008), then only the rows on the current page.
 func (s *server) buildSection(rep *report, sec reportSection) (sectionView, error) {
-	ctx, id := rep.ctx, rep.check.ID
+	c := rep.check
 	var (
-		total int64
-		rows  any
-		err   error
+		pg   pager
+		rows any
+		err  error
 	)
-	var pg pager
+	// paged sets the section's pager for its total and returns the window of
+	// rows on the current page.
+	paged := func(total int64) window {
+		pg = paginateSection(rep.url, sec.ID, int(total))
+		return pg.Window()
+	}
 	switch sec.ID {
 	case "changed":
-		idx, err := s.diffIndex(rep)
-		if err != nil {
-			return sectionView{}, err
-		}
-		total = int64(len(idx.changed))
-		pg = paginateSection(rep.url, sec.ID, int(total))
-		rows, err = s.changedRows(rep, idx.changed[pg.Offset():pg.End(int(total))])
-		if err != nil {
-			return sectionView{}, err
-		}
+		tiers := rep.changedTiers()
+		rows, err = s.changedRows(rep, tiers, paged(rep.counts().changed()))
 	case "failures":
-		if total, err = s.q.CountFetchFailures(ctx, id); err != nil {
-			return sectionView{}, err
-		}
-		pg = paginateSection(rep.url, sec.ID, int(total))
-		rows, err = s.q.ListFetchFailures(ctx, dbgen.ListFetchFailuresParams{CheckID: id, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset())})
+		w := paged(int64(c.CountFailures))
+		rows, err = sectionRows(rep.dense(int64(c.CountFailures)),
+			func() ([]dbgen.ListFetchFailuresDenseRow, error) {
+				return s.q.ListFetchFailuresDense(rep.ctx, dbgen.ListFetchFailuresDenseParams{CheckID: c.ID, ProjectID: c.ProjectID, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func() ([]dbgen.ListFetchFailuresSparseRow, error) {
+				return s.q.ListFetchFailuresSparse(rep.ctx, dbgen.ListFetchFailuresSparseParams{CheckID: c.ID, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func(r dbgen.ListFetchFailuresSparseRow) dbgen.ListFetchFailuresDenseRow {
+				return dbgen.ListFetchFailuresDenseRow(r)
+			})
 	case "skipped":
-		if total, err = s.q.CountSkippedFetches(ctx, id); err != nil {
-			return sectionView{}, err
-		}
-		pg = paginateSection(rep.url, sec.ID, int(total))
-		rows, err = s.q.ListSkippedFetches(ctx, dbgen.ListSkippedFetchesParams{CheckID: id, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset())})
+		w := paged(int64(c.CountSkipped))
+		rows, err = sectionRows(rep.dense(int64(c.CountSkipped)),
+			func() ([]dbgen.ListSkippedFetchesDenseRow, error) {
+				return s.q.ListSkippedFetchesDense(rep.ctx, dbgen.ListSkippedFetchesDenseParams{CheckID: c.ID, ProjectID: c.ProjectID, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func() ([]dbgen.ListSkippedFetchesSparseRow, error) {
+				return s.q.ListSkippedFetchesSparse(rep.ctx, dbgen.ListSkippedFetchesSparseParams{CheckID: c.ID, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func(r dbgen.ListSkippedFetchesSparseRow) dbgen.ListSkippedFetchesDenseRow {
+				return dbgen.ListSkippedFetchesDenseRow(r)
+			})
 	default:
-		if total, err = s.q.CountPageEvents(ctx, dbgen.CountPageEventsParams{CheckID: id, Kinds: sec.Kinds}); err != nil {
-			return sectionView{}, err
-		}
-		pg = paginateSection(rep.url, sec.ID, int(total))
-		rows, err = s.q.ListPageEvents(ctx, dbgen.ListPageEventsParams{
-			CheckID: id, Kinds: sec.Kinds, RowLimit: int32(pg.Per), RowOffset: int32(pg.Offset()),
-		})
+		total := int64(sec.Count(c))
+		w := paged(total)
+		rows, err = sectionRows(rep.dense(total),
+			func() ([]dbgen.ListPageEventsDenseRow, error) {
+				return s.q.ListPageEventsDense(rep.ctx, dbgen.ListPageEventsDenseParams{CheckID: c.ID, ProjectID: c.ProjectID, Kinds: sec.Kinds, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func() ([]dbgen.ListPageEventsSparseRow, error) {
+				return s.q.ListPageEventsSparse(rep.ctx, dbgen.ListPageEventsSparseParams{CheckID: c.ID, Kinds: sec.Kinds, RowLimit: w.Limit, RowOffset: w.Offset})
+			},
+			func(r dbgen.ListPageEventsSparseRow) dbgen.ListPageEventsDenseRow {
+				return dbgen.ListPageEventsDenseRow(r)
+			})
 	}
 	if err != nil {
 		return sectionView{}, err
 	}
 	return sectionView{ID: sec.ID, Pager: pg, Rows: rows}, nil
+}
+
+// sectionRows reads a page of a section the dense way or the sparse way (ADR
+// 0010). The two queries select the same columns, so conv turns a sparse row
+// into the dense row type the templates read. On error it returns no rows.
+func sectionRows[D, S any](dense bool, listDense func() ([]D, error), listSparse func() ([]S, error), conv func(S) D) ([]D, error) {
+	if dense {
+		return listDense()
+	}
+	sparse, err := listSparse()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]D, len(sparse))
+	for i, r := range sparse {
+		out[i] = conv(r)
+	}
+	return out, nil
 }
 
 // changedRow is one Page in the Changed Pages section.
@@ -205,41 +277,46 @@ func (s *server) checkChain(ctx context.Context, checkID, projectID int64, host,
 	return chain, lookupErr
 }
 
-// diffIndex is a Check's Diffs classified for its Report: the changed ones,
-// most significant first, and how many were unchanged. Pages that are now
-// ignored or excluded are left out of both.
-type diffIndex struct {
-	changed   []int64 // snapshot ids
-	unchanged int
+// changedTier is one tier of the Changed section and how many Diffs the Check
+// has in it.
+type changedTier struct {
+	name  string
+	count int64
 }
 
-// diffIndex classifies the whole Check once per request from a light query,
-// so counts and ranking never depend on the page shown.
-func (s *server) diffIndex(rep *report) (*diffIndex, error) {
-	if rep.diffs != nil {
-		return rep.diffs, nil
+// changedTiers are the tiers of the Changed section, most significant first,
+// with the counts stored when the Check ended. Every Diff of the Check is
+// counted, whatever its Page's state is now: a Report is fixed when its Check
+// ends. This departs from story 78 of #19 (leave ignored and excluded Pages
+// out of the Report) for Pages ignored or excluded after the Check; see ADR 0008.
+func (rep *report) changedTiers() []changedTier {
+	rc := rep.counts()
+	return []changedTier{
+		{string(diff.TierCritical), rc.Critical},
+		{string(diff.TierSEO), rc.SEO},
+		{string(diff.TierHeaders), rc.Headers},
+		{string(diff.TierBody), rc.Body},
 	}
-	rows, err := s.q.ListCheckDiffStates(rep.ctx, rep.check.ID)
-	if err != nil {
-		return nil, err
-	}
-	idx := &diffIndex{}
-	for _, d := range rows {
-		if d.State == page.StateIgnored || page.Excluded(rep.proj.ExcludePatterns, d.Origin, d.Url) {
-			continue
-		}
-		if d.Tier == string(diff.TierEmpty) {
-			idx.unchanged++
-			continue
-		}
-		idx.changed = append(idx.changed, d.SnapshotID)
-	}
-	rep.diffs = idx
-	return idx, nil
 }
 
-// changedRows loads and formats the given changed Diffs, in ranked order.
-func (s *server) changedRows(rep *report, ids []int64) ([]changedRow, error) {
+// changedRows loads and formats the Changed rows in w (positions in the
+// section, which runs through the tiers in order). Each tier the page touches
+// is read at its own offset, so a page can span two tiers.
+func (s *server) changedRows(rep *report, tiers []changedTier, w window) ([]changedRow, error) {
+	var ids []int64
+	var start int64
+	from, to := int64(w.Offset), int64(w.Offset)+int64(w.Limit)
+	for _, t := range tiers {
+		lo, hi := max(from, start), min(to, start+t.count)
+		if lo < hi {
+			tierIDs, err := s.changedIDs(rep, t, window{Offset: int32(lo - start), Limit: int32(hi - lo)})
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, tierIDs...)
+		}
+		start += t.count
+	}
 	rows, err := s.q.ListCheckDiffRows(rep.ctx, ids)
 	if err != nil {
 		return nil, err
@@ -253,6 +330,21 @@ func (s *server) changedRows(rep *report, ids []int64) ([]changedRow, error) {
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// changedIDs is the Snapshot ids of one page of a tier, in URL order.
+func (s *server) changedIDs(rep *report, t changedTier, w window) ([]int64, error) {
+	c := rep.check
+	return sectionRows(rep.dense(t.count),
+		func() ([]int64, error) {
+			return s.q.ListChangedSnapshotIDsDense(rep.ctx, dbgen.ListChangedSnapshotIDsDenseParams{
+				CheckID: c.ID, ProjectID: c.ProjectID, Tier: t.name, RowLimit: w.Limit, RowOffset: w.Offset})
+		},
+		func() ([]int64, error) {
+			return s.q.ListChangedSnapshotIDsSparse(rep.ctx, dbgen.ListChangedSnapshotIDsSparseParams{
+				CheckID: c.ID, Tier: t.name, RowLimit: w.Limit, RowOffset: w.Offset})
+		},
+		func(id int64) int64 { return id })
 }
 
 func (s *server) changedRowOf(ctx context.Context, checkID int64, p dbgen.Project, d dbgen.ListCheckDiffRowsRow) (changedRow, error) {

@@ -7,26 +7,31 @@ import (
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/links"
 	"github.com/ihorbryk/seo-site-checker/internal/page"
+	"github.com/ihorbryk/seo-site-checker/internal/project"
 	"github.com/ihorbryk/seo-site-checker/internal/urlnorm"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // discover stores a Snapshot's outgoing links (those of a 2xx HTML page, or a
 // 3xx's redirect target), turns new URLs into discovered Pages with pending
-// Fetches, and records dropped URLs.
-func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, found links.Result) error {
+// Fetches, and records dropped URLs. It returns how many Pages and Fetches it
+// added, for the Check's progress counters.
+func discover(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, found links.Result) (added discovered, err error) {
 	settings, err := check.ParseSettings(chk.Settings)
 	if err != nil {
-		return err
+		return added, err
 	}
 	found.Links = withoutExcluded(found.Links, settings.ExcludePatterns, "https://"+urlnorm.Host(f.Url)+"/")
 	if len(found.Links) > 0 {
-		if err := addLinkedPages(ctx, q, chk, f, found.Links); err != nil {
-			return err
+		if added, err = addLinkedPages(ctx, q, chk, f, found.Links); err != nil {
+			return added, err
 		}
 	}
-	return recordDropped(ctx, q, chk.ID, found.Dropped)
+	return added, recordDropped(ctx, q, chk.ID, found.Dropped)
 }
+
+// discovered is what a Snapshot's URL discovery added to the Check.
+type discovered struct{ pages, fetches int64 }
 
 // withoutExcluded drops the links the Check's copy of the exclude patterns
 // excludes: they are not added to the pool and get no Fetch. The seed Page's
@@ -47,17 +52,27 @@ func withoutExcluded(ls []links.Link, patterns []string, seedURL string) []links
 
 // addLinkedPages adds the linked URLs to the pool, reactivates retired ones,
 // plans Fetches for the active ones and stores the Snapshot's links.
-func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, ls []links.Link) error {
+func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.GetClaimedFetchRow, ls []links.Link) (added discovered, err error) {
 	urls := make([]string, 0, len(ls))
 	for _, l := range ls {
 		urls = append(urls, l.URL)
 	}
-	if err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
-		return err
+	// The stored answer comes from the Project's current patterns, not the
+	// Check's frozen copy (ADR 0009).
+	isExcluded, err := project.LockExclusion(ctx, q, f.ProjectID)
+	if err != nil {
+		return added, err
+	}
+	excluded := make([]bool, len(urls))
+	for i, u := range urls {
+		excluded[i] = isExcluded(page.OriginDiscovered, u)
+	}
+	if added.pages, err = q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls, Excluded: excluded}); err != nil {
+		return added, err
 	}
 	pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})
 	if err != nil {
-		return err
+		return added, err
 	}
 	idOf := make(map[string]int64, len(pages))
 	ids := make([]int64, 0, len(pages))
@@ -66,10 +81,10 @@ func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *d
 		ids = append(ids, p.ID)
 	}
 	if err := reactivate(ctx, q, chk.ID, ids); err != nil {
-		return err
+		return added, err
 	}
-	if _, err := q.PlanDiscoveredFetches(ctx, dbgen.PlanDiscoveredFetchesParams{CheckID: chk.ID, PageIds: ids}); err != nil {
-		return err
+	if added.fetches, err = q.PlanDiscoveredFetches(ctx, dbgen.PlanDiscoveredFetchesParams{CheckID: chk.ID, PageIds: ids}); err != nil {
+		return added, err
 	}
 	bySource := map[string][]int64{}
 	for _, l := range ls {
@@ -77,10 +92,10 @@ func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *d
 	}
 	for source, pageIDs := range bySource {
 		if err := q.InsertLinks(ctx, dbgen.InsertLinksParams{SnapshotID: f.ID, Source: source, PageIds: pageIDs}); err != nil {
-			return err
+			return added, err
 		}
 	}
-	return nil
+	return added, nil
 }
 
 func recordDropped(ctx context.Context, q *dbgen.Queries, checkID int64, dropped []links.Dropped) error {

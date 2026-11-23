@@ -93,6 +93,17 @@ type Check struct {
 	PlanCursor            int64
 	FinalizeCursor        pgtype.Int8
 	FirstFetchID          pgtype.Int8
+	ProgressKnown         int64
+	ProgressFetched       int64
+	ProgressFailed        int64
+	ProgressDiscovered    int64
+	CountDiffCritical     int32
+	CountDiffSeo          int32
+	CountDiffHeaders      int32
+	CountDiffBody         int32
+	CountDiffEmpty        int32
+	SeedFailed            bool
+	CountPages            int32
 }
 
 type Diff struct {
@@ -104,6 +115,7 @@ type Diff struct {
 	BodyChanged    bool
 	SeoChanges     []byte
 	Tier           string
+	CheckID        int64
 }
 
 type DroppedUrl struct {
@@ -149,6 +161,7 @@ type Page struct {
 	OrphanStreak       int32
 	CreatedAt          time.Time
 	ReactivatedCheckID pgtype.Int8
+	Excluded           bool
 }
 
 type PageEvent struct {
@@ -170,6 +183,9 @@ type Project struct {
 	CreatedAt       time.Time
 	OwnerID         int64
 	LastCheckNumber int64
+	ExcludeGen      int64
+	ExcludeCursor   int64
+	ExcludeDoneGen  int64
 }
 
 type RiverJob struct {
