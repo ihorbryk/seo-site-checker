@@ -31,6 +31,9 @@ type Options struct {
 	// FinalizeBatchSize is how many of a Check's Pages a FinalizeCheck job
 	// finalizes. Defaults to DefaultFinalizeBatchSize (tests lower it).
 	FinalizeBatchSize int
+	// ExcludeBatchSize is how many Pages an ExcludeRecompute job recomputes.
+	// Defaults to DefaultExcludeBatchSize (tests lower it).
+	ExcludeBatchSize int
 }
 
 type deps struct {
@@ -40,6 +43,7 @@ type deps struct {
 	log               *slog.Logger
 	planBatchSize     int // 0 means DefaultPlanBatchSize
 	finalizeBatchSize int // 0 means DefaultFinalizeBatchSize
+	excludeBatchSize  int // 0 means DefaultExcludeBatchSize
 }
 
 // rescueStuckJobsAfter is River's stuck-job delay (ADR 0003). Every job
@@ -57,12 +61,13 @@ func NewClient(pool *pgxpool.Pool, opts Options) (*river.Client[pgx.Tx], error) 
 		opts.Log = slog.Default()
 	}
 	d := &deps{pool: pool, q: dbgen.New(pool), client: opts.HTTPClient, log: opts.Log, planBatchSize: opts.PlanBatchSize,
-		finalizeBatchSize: opts.FinalizeBatchSize}
+		finalizeBatchSize: opts.FinalizeBatchSize, excludeBatchSize: opts.ExcludeBatchSize}
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &startWorker{deps: d})
 	river.AddWorker(workers, &laneWorker{deps: d})
 	river.AddWorker(workers, &finalizeWorker{deps: d})
+	river.AddWorker(workers, &excludeWorker{deps: d})
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues:  map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: opts.Concurrency}},
 		Workers: workers,

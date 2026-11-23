@@ -52,7 +52,18 @@ func addLinkedPages(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *d
 	for _, l := range ls {
 		urls = append(urls, l.URL)
 	}
-	if err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls}); err != nil {
+	// The stored answer comes from the Project's current patterns, not the
+	// Check's frozen copy. The shared lock lasts to the end of the transaction,
+	// so a save of the patterns waits for this insert (ADR 0009).
+	patterns, err := q.LockProjectShared(ctx, f.ProjectID)
+	if err != nil {
+		return err
+	}
+	excluded := make([]bool, len(urls))
+	for i, u := range urls {
+		excluded[i] = page.Excluded(patterns, page.OriginDiscovered, u)
+	}
+	if err := q.UpsertDiscoveredPages(ctx, dbgen.UpsertDiscoveredPagesParams{ProjectID: f.ProjectID, Urls: urls, Excluded: excluded}); err != nil {
 		return err
 	}
 	pages, err := q.PageIDsByURL(ctx, dbgen.PageIDsByURLParams{ProjectID: f.ProjectID, Urls: urls})

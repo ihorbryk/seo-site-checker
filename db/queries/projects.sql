@@ -10,8 +10,8 @@ SELECT * FROM projects ORDER BY domain;
 SELECT * FROM projects WHERE owner_id = sqlc.arg(owner_id) AND domain = sqlc.arg(domain);
 
 -- name: CreatePage :one
-INSERT INTO pages (project_id, url, origin)
-VALUES (sqlc.arg(project_id), sqlc.arg(url), sqlc.arg(origin))
+INSERT INTO pages (project_id, url, origin, excluded)
+VALUES (sqlc.arg(project_id), sqlc.arg(url), sqlc.arg(origin), sqlc.arg(excluded))
 RETURNING *;
 
 -- name: ListPagesByProject :many

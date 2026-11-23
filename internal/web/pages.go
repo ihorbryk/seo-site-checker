@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,25 +14,57 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// poolFilters are the Page pool tab's filters, in display order; "" is all.
-var poolFilters = []struct{ Key, Label string }{
-	{"", "All"}, {page.StateActive, "Active"}, {"orphaned", "Orphaned"},
-	{page.StateRetired, "Retired"}, {page.StateIgnored, "Ignored"}, {"excluded", "Excluded"},
+// poolFilter is one of the Page pool tab's filters. count reads its count from
+// the one CountPagePool aggregate and list is the paginated SQL query of its
+// Page ids in URL order. Each repeats the precedence of poolState; a test pins
+// them to it.
+type poolFilter struct {
+	Key, Label string
+	count      func(dbgen.CountPagePoolRow) int64
+	list       func(context.Context, *dbgen.Queries, int64, int32, int32) ([]int64, error)
 }
 
-// pagePoolState is what poolState needs to classify a Page.
+// poolFilters are the Page pool tab's filters, in display order; "" is all.
+var poolFilters = []poolFilter{
+	{"", "All", func(c dbgen.CountPagePoolRow) int64 { return c.Total },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolAll(ctx, dbgen.ListPagePoolAllParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+	{page.StateActive, "Active", func(c dbgen.CountPagePoolRow) int64 { return c.Active },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolActive(ctx, dbgen.ListPagePoolActiveParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+	{"orphaned", "Orphaned", func(c dbgen.CountPagePoolRow) int64 { return c.Orphaned },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolOrphaned(ctx, dbgen.ListPagePoolOrphanedParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+	{page.StateRetired, "Retired", func(c dbgen.CountPagePoolRow) int64 { return c.Retired },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolRetired(ctx, dbgen.ListPagePoolRetiredParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+	{page.StateIgnored, "Ignored", func(c dbgen.CountPagePoolRow) int64 { return c.Ignored },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolIgnored(ctx, dbgen.ListPagePoolIgnoredParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+	{"excluded", "Excluded", func(c dbgen.CountPagePoolRow) int64 { return c.Excluded },
+		func(ctx context.Context, q *dbgen.Queries, id int64, limit, offset int32) ([]int64, error) {
+			return q.ListPagePoolExcluded(ctx, dbgen.ListPagePoolExcludedParams{ProjectID: id, RowLimit: limit, RowOffset: offset})
+		}},
+}
+
+// pagePoolState is what poolState needs to classify a Page. Excluded is the
+// stored answer (ADR 0009); it already accounts for the seed Page.
 type pagePoolState struct {
-	State, Origin, URL string
-	OrphanStreak       int32
-	ExcludePatterns    []string
+	State        string
+	OrphanStreak int32
+	Excluded     bool
 }
 
 // poolState classifies a Page for display: the filter key it belongs to
 // (orphaned Pages are also active; excluded ones are not) and its label.
-// Exclusion is computed on render, never stored; the seed Page is never excluded.
 func poolState(pg pagePoolState) (key, label string) {
 	switch {
-	case pg.State == page.StateActive && page.Excluded(pg.ExcludePatterns, pg.Origin, pg.URL):
+	case pg.State == page.StateActive && pg.Excluded:
 		return "excluded", "matches exclude pattern"
 	case pg.State == page.StateActive && pg.OrphanStreak > 0:
 		return "orphaned", fmt.Sprintf("orphaned %d/%d", pg.OrphanStreak, page.RetireAfter)
@@ -66,48 +99,36 @@ func (s *server) projectPages(w http.ResponseWriter, r *http.Request) {
 // renderPool writes the Page pool tab; flash, if not nil, is shown above the
 // Add Page form.
 func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Project, flash map[string]any) {
-	// The whole pool is classified in Go (exclusion is never stored) for the
-	// filter counts and the filtered total; only the Pages on the current page
-	// load the costly columns.
-	states, err := s.q.ListPagePoolStates(r.Context(), p.ID)
+	// Counts, the filtered list and its pagination are SQL (ADR 0009); only
+	// the Pages shown load the costly columns.
+	counts, err := s.q.CountPagePool(r.Context(), p.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	filter := r.URL.Query().Get("state")
-	known := false
+	cur := poolFilters[0]
 	for _, f := range poolFilters {
-		known = known || f.Key == filter
-	}
-	if !known {
-		filter = ""
-	}
-	counts := map[string]int{}
-	labels := map[int64]string{}
-	var ids []int64
-	for _, pg := range states {
-		key, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: p.ExcludePatterns})
-		counts[""]++
-		counts[key]++
-		if key == "orphaned" {
-			counts[page.StateActive]++
+		if f.Key == r.URL.Query().Get("state") {
+			cur = f
 		}
-		if filter != "" && key != filter && !(filter == page.StateActive && key == "orphaned") {
-			continue
-		}
-		ids = append(ids, pg.ID)
-		labels[pg.ID] = label
 	}
-	pager := paginate(r.URL, len(ids))
-	pages, err := s.q.ListPagePoolRows(r.Context(), ids[pager.Offset():pager.End(len(ids))])
+	filter := cur.Key
+	pager := paginate(r.URL, int(cur.count(counts)))
+	ids, err := cur.list(r.Context(), s.q, p.ID, int32(pager.Per), int32(pager.Offset()))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	pages, err := s.q.ListPagePoolRows(r.Context(), ids)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	rows := make([]poolRow, 0, len(pages))
 	for _, pg := range pages {
+		_, label := poolState(pagePoolState{State: pg.State, OrphanStreak: pg.OrphanStreak, Excluded: pg.Excluded})
 		row := poolRow{
-			ID: pg.ID, URL: pg.Url, State: labels[pg.ID], LastStatus: pg.LastStatus,
+			ID: pg.ID, URL: pg.Url, State: label, LastStatus: pg.LastStatus,
 			Snapshots: pg.Snapshots, FirstCheck: pg.FirstCheckNumber, LastChangedID: pg.LastChangedSnapshotID,
 		}
 		if pg.LastChangedSnapshotID != 0 {
@@ -122,7 +143,7 @@ func (s *server) renderPool(w http.ResponseWriter, r *http.Request, p dbgen.Proj
 	}
 	var filters []filterView
 	for _, f := range poolFilters {
-		filters = append(filters, filterView{f.Label, pager.With("state", f.Key), counts[f.Key], f.Key == filter})
+		filters = append(filters, filterView{f.Label, pager.With("state", f.Key), int(f.count(counts)), f.Key == filter})
 	}
 	data := map[string]any{"Project": p, "Tab": "pages", "Pages": rows, "Filters": filters, "Flash": flash, "Pager": pager}
 	s.render(w, r, "pages", p.Domain, projectCrumbs(p, crumb{Label: "Page pool"}), data)
@@ -161,7 +182,7 @@ func (s *server) addPage(w http.ResponseWriter, r *http.Request) {
 		reject(fmt.Sprintf("%s is refused (%s)", norm, strings.ReplaceAll(v, "_", " ")))
 		return
 	}
-	pg, err := s.q.AddManualPage(r.Context(), dbgen.AddManualPageParams{ProjectID: p.ID, Url: norm})
+	pg, err := s.addManualPage(r.Context(), p.ID, norm)
 	switch {
 	case err == nil:
 	case errors.Is(err, pgx.ErrNoRows):
@@ -295,7 +316,7 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	_, label := poolState(pagePoolState{State: pg.State, Origin: pg.Origin, URL: pg.Url, OrphanStreak: pg.OrphanStreak, ExcludePatterns: pg.ExcludePatterns})
+	_, label := poolState(pagePoolState{State: pg.State, OrphanStreak: pg.OrphanStreak, Excluded: pg.Excluded})
 	first := ""
 	if pg.FirstCheckNumber != 0 {
 		first = fmt.Sprintf("%d", pg.FirstCheckNumber)
@@ -307,4 +328,27 @@ func (s *server) pageHistory(w http.ResponseWriter, r *http.Request) {
 		"CanIgnore":  pg.Origin != page.OriginSeed && pg.State != page.StateIgnored,
 		"CanRestore": pg.State == page.StateIgnored,
 	})
+}
+
+// addManualPage adds the Page with its stored exclusion answer under the
+// Project's current patterns; the shared lock lasts to the commit, so a save
+// of the patterns waits for it (ADR 0009).
+func (s *server) addManualPage(ctx context.Context, projectID int64, url string) (dbgen.Page, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dbgen.Page{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	q := dbgen.New(tx)
+	patterns, err := q.LockProjectShared(ctx, projectID)
+	if err != nil {
+		return dbgen.Page{}, err
+	}
+	pg, err := q.AddManualPage(ctx, dbgen.AddManualPageParams{
+		ProjectID: projectID, Url: url, Excluded: page.Excluded(patterns, page.OriginManual, url),
+	})
+	if err != nil {
+		return dbgen.Page{}, err
+	}
+	return pg, tx.Commit(ctx)
 }

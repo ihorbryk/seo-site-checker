@@ -171,8 +171,11 @@ WHERE pg.project_id = c.project_id AND pg.origin = 'discovered' AND pg.created_a
 
 -- name: UpsertDiscoveredPages :exec
 -- Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
-INSERT INTO pages (project_id, url, origin)
-SELECT sqlc.arg(project_id), u, 'discovered' FROM unnest(sqlc.arg(urls)::text[]) AS u
+-- excluded[i] is the answer for urls[i] under the Project's current patterns.
+INSERT INTO pages (project_id, url, origin, excluded)
+SELECT sqlc.arg(project_id), u.url, 'discovered', f.excluded
+FROM unnest(sqlc.arg(urls)::text[]) WITH ORDINALITY AS u(url, n)
+JOIN unnest(sqlc.arg(excluded)::boolean[]) WITH ORDINALITY AS f(excluded, n) USING (n)
 ON CONFLICT (project_id, url) DO NOTHING;
 
 -- name: PageIDsByURL :many

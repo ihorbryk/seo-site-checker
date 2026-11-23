@@ -571,7 +571,7 @@ func (q *Queries) GetClaimedFetch(ctx context.Context, jobID pgtype.Int8) (GetCl
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number FROM projects WHERE id = $1
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
@@ -590,6 +590,8 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 		&i.CreatedAt,
 		&i.OwnerID,
 		&i.LastCheckNumber,
+		&i.ExcludeGen,
+		&i.ExcludeCursor,
 	)
 	return i, err
 }
@@ -1455,18 +1457,22 @@ func (q *Queries) SkipPendingFetches(ctx context.Context, arg SkipPendingFetches
 }
 
 const upsertDiscoveredPages = `-- name: UpsertDiscoveredPages :exec
-INSERT INTO pages (project_id, url, origin)
-SELECT $1, u, 'discovered' FROM unnest($2::text[]) AS u
+INSERT INTO pages (project_id, url, origin, excluded)
+SELECT $1, u.url, 'discovered', f.excluded
+FROM unnest($2::text[]) WITH ORDINALITY AS u(url, n)
+JOIN unnest($3::boolean[]) WITH ORDINALITY AS f(excluded, n) USING (n)
 ON CONFLICT (project_id, url) DO NOTHING
 `
 
 type UpsertDiscoveredPagesParams struct {
 	ProjectID int64
 	Urls      []string
+	Excluded  []bool
 }
 
 // Adds the URLs as discovered Pages of the Project, leaving existing ones alone.
+// excluded[i] is the answer for urls[i] under the Project's current patterns.
 func (q *Queries) UpsertDiscoveredPages(ctx context.Context, arg UpsertDiscoveredPagesParams) error {
-	_, err := q.db.Exec(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls)
+	_, err := q.db.Exec(ctx, upsertDiscoveredPages, arg.ProjectID, arg.Urls, arg.Excluded)
 	return err
 }

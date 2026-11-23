@@ -106,7 +106,7 @@ func AddWithSchedule(ctx context.Context, db Beginner, ownerID int64, input, sch
 		return dbgen.Project{}, err
 	}
 	if _, err := q.CreatePage(ctx, dbgen.CreatePageParams{
-		ProjectID: p.ID, Url: "https://" + domain + "/", Origin: page.OriginSeed,
+		ProjectID: p.ID, Url: "https://" + domain + "/", Origin: page.OriginSeed, Excluded: false, // the seed Page is never excluded
 	}); err != nil {
 		return dbgen.Project{}, err
 	}

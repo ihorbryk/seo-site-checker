@@ -11,6 +11,8 @@ import (
 
 	"github.com/ihorbryk/seo-site-checker/internal/check"
 	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
 )
 
 // Schedules is the schedule enum, in the order the form lists it.
@@ -137,8 +139,11 @@ func SettingsOf(p dbgen.Project) (RequestSettings, error) {
 }
 
 // SaveRequestSettings stores s. A running Check keeps the settings it started
-// with; the next Check uses these.
-func SaveRequestSettings(ctx context.Context, q *dbgen.Queries, projectID int64, s RequestSettings) error {
+// with; the next Check uses these. If the exclude patterns changed it also
+// starts a new generation of the exclusion recompute (ADR 0009) in the same
+// transaction: the Page pool tab shows each Page's old answer until the jobs
+// reach it.
+func SaveRequestSettings(ctx context.Context, db Beginner, rc *river.Client[pgx.Tx], projectID int64, s RequestSettings) error {
 	headers := s.Headers
 	if headers == nil {
 		headers = []check.Header{}
@@ -151,9 +156,33 @@ func SaveRequestSettings(ctx context.Context, q *dbgen.Queries, projectID int64,
 	if err != nil {
 		return err
 	}
-	return q.UpdateProjectRequestSettings(ctx, dbgen.UpdateProjectRequestSettingsParams{
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	q := dbgen.New(tx)
+	// The lock waits for an insert of a Page that read the old patterns and
+	// makes later inserts wait for this save.
+	old, err := q.LockProjectForExclusion(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if err := q.UpdateProjectRequestSettings(ctx, dbgen.UpdateProjectRequestSettingsParams{
 		ID: projectID, Schedule: s.Schedule, UserAgent: s.UserAgent, CustomHeaders: raw,
 		TimeoutS: int32(s.TimeoutS), MaxParallel: int32(s.MaxParallel), RespectRobots: s.RespectRobots,
 		ExcludePatterns: patterns,
-	})
+	}); err != nil {
+		return err
+	}
+	if !slices.Equal(old.ExcludePatterns, patterns) {
+		gen, err := q.StartExcludeRecompute(ctx, projectID)
+		if err != nil {
+			return err
+		}
+		if _, err := rc.InsertTx(ctx, tx, check.ExcludeRecomputeArgs{ProjectID: projectID, Generation: gen}, nil); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

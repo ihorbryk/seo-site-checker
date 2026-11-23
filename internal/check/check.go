@@ -124,6 +124,22 @@ func (FinalizeCheckArgs) InsertOpts() river.InsertOpts {
 	return river.InsertOpts{MaxAttempts: 5, UniqueOpts: river.UniqueOpts{ByArgs: true}}
 }
 
+// ExcludeRecomputeArgs recomputes which of a Project's Pages its exclude
+// patterns match, one batch at a time (ADR 0009). Saving different patterns
+// starts generation Generation at AfterPageID 0; each job handles the Pages
+// after AfterPageID, which must still be the Project's exclude_cursor, and
+// only while Generation is still the Project's exclude_gen. A duplicate, a
+// retry or a job of an older generation therefore does nothing.
+type ExcludeRecomputeArgs struct {
+	ProjectID   int64 `json:"project_id"`
+	Generation  int64 `json:"generation"`
+	AfterPageID int64 `json:"after_page_id,omitempty"`
+}
+
+func (ExcludeRecomputeArgs) Kind() string { return "exclude_recompute" }
+
+func (ExcludeRecomputeArgs) InsertOpts() river.InsertOpts { return river.InsertOpts{MaxAttempts: 5} }
+
 // NewInsertClient returns an insert-only River client, as web and the
 // scheduler use. It never works jobs.
 func NewInsertClient(pool *pgxpool.Pool) (*river.Client[pgx.Tx], error) {
