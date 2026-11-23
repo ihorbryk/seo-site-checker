@@ -451,6 +451,7 @@ UPDATE checks SET finalize_cursor = sqlc.arg(upto_id)::bigint,
     count_diff_critical = count_diff_critical + b.d_critical, count_diff_seo = count_diff_seo + b.d_seo,
     count_diff_headers = count_diff_headers + b.d_headers, count_diff_body = count_diff_body + b.d_body,
     count_diff_empty = count_diff_empty + b.d_empty,
+    count_pages = count_pages + pc.pages,
     seed_failed = checks.seed_failed OR b.seed_bad,
     count_new = count_new + e.new, count_vanished = count_vanished + e.vanished, count_retired = count_retired + e.retired
 FROM (
@@ -473,7 +474,12 @@ FROM (
            count(*) FILTER (WHERE be.kind = 'retired')::int AS retired
     FROM page_events be
     WHERE be.check_id = sqlc.arg(check_id) AND be.page_id > sqlc.arg(after_id) AND be.page_id <= sqlc.arg(upto_id)
-) e
+) e, (
+    -- The Project's Pages the batch walks, fetched in the Check or not.
+    SELECT count(*)::int AS pages FROM pages bpg
+    WHERE bpg.project_id = (SELECT project_id FROM checks WHERE id = sqlc.arg(check_id))
+      AND bpg.id > sqlc.arg(after_id) AND bpg.id <= sqlc.arg(upto_id)
+) pc
 WHERE checks.id = sqlc.arg(check_id);
 
 -- name: EndCheck :exec

@@ -103,6 +103,7 @@ type Check struct {
 	CountDiffBody         int32
 	CountDiffEmpty        int32
 	SeedFailed            bool
+	CountPages            int32
 }
 
 type Diff struct {

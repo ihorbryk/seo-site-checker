@@ -136,10 +136,15 @@ func (s *server) reportSectionPage(w http.ResponseWriter, r *http.Request) {
 const denseFactor = 100
 
 // dense reports whether a section of n rows is read by walking the Pages. The
-// pool is the Check's own Fetches, stored when it ended.
+// pool is the number of Pages the walk steps over, stored when the Check
+// ended: retired, ignored and excluded Pages get no Fetch but are walked too.
+// A Check that ended before that count was stored uses its own Fetches.
 func (rep *report) dense(n int64) bool {
 	c := rep.check
-	pool := int64(c.CountSnapshots) + int64(c.CountFailures) + int64(c.CountSkipped)
+	pool := int64(c.CountPages)
+	if pool == 0 {
+		pool = int64(c.CountSnapshots) + int64(c.CountFailures) + int64(c.CountSkipped)
+	}
 	return n*denseFactor >= pool
 }
 

@@ -49,6 +49,7 @@ UPDATE checks SET finalize_cursor = $1::bigint,
     count_diff_critical = count_diff_critical + b.d_critical, count_diff_seo = count_diff_seo + b.d_seo,
     count_diff_headers = count_diff_headers + b.d_headers, count_diff_body = count_diff_body + b.d_body,
     count_diff_empty = count_diff_empty + b.d_empty,
+    count_pages = count_pages + pc.pages,
     seed_failed = checks.seed_failed OR b.seed_bad,
     count_new = count_new + e.new, count_vanished = count_vanished + e.vanished, count_retired = count_retired + e.retired
 FROM (
@@ -71,7 +72,12 @@ FROM (
            count(*) FILTER (WHERE be.kind = 'retired')::int AS retired
     FROM page_events be
     WHERE be.check_id = $2 AND be.page_id > $3 AND be.page_id <= $1
-) e
+) e, (
+    -- The Project's Pages the batch walks, fetched in the Check or not.
+    SELECT count(*)::int AS pages FROM pages bpg
+    WHERE bpg.project_id = (SELECT project_id FROM checks WHERE id = $2)
+      AND bpg.id > $3 AND bpg.id <= $1
+) pc
 WHERE checks.id = $2
 `
 
@@ -255,7 +261,7 @@ WITH n AS (
 )
 INSERT INTO checks (project_id, trigger, number)
 SELECT $1, $2, n.last_check_number FROM n
-RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed
+RETURNING id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed, count_pages
 `
 
 type CreateCheckParams struct {
@@ -305,6 +311,7 @@ func (q *Queries) CreateCheck(ctx context.Context, arg CreateCheckParams) (Check
 		&i.CountDiffBody,
 		&i.CountDiffEmpty,
 		&i.SeedFailed,
+		&i.CountPages,
 	)
 	return i, err
 }
@@ -397,7 +404,7 @@ func (q *Queries) FinishFetchSnapshot(ctx context.Context, arg FinishFetchSnapsh
 }
 
 const getActiveCheck = `-- name: GetActiveCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed FROM checks
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed, count_pages FROM checks
 WHERE project_id = $1 AND state IN ('queued', 'planning', 'running', 'cancelling')
 `
 
@@ -440,12 +447,13 @@ func (q *Queries) GetActiveCheck(ctx context.Context, projectID int64) (Check, e
 		&i.CountDiffBody,
 		&i.CountDiffEmpty,
 		&i.SeedFailed,
+		&i.CountPages,
 	)
 	return i, err
 }
 
 const getCheck = `-- name: GetCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed FROM checks WHERE id = $1
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed, count_pages FROM checks WHERE id = $1
 `
 
 func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
@@ -487,12 +495,13 @@ func (q *Queries) GetCheck(ctx context.Context, id int64) (Check, error) {
 		&i.CountDiffBody,
 		&i.CountDiffEmpty,
 		&i.SeedFailed,
+		&i.CountPages,
 	)
 	return i, err
 }
 
 const getCheckByNumber = `-- name: GetCheckByNumber :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed FROM checks WHERE project_id = $1 AND number = $2
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed, count_pages FROM checks WHERE project_id = $1 AND number = $2
 `
 
 type GetCheckByNumberParams struct {
@@ -539,6 +548,7 @@ func (q *Queries) GetCheckByNumber(ctx context.Context, arg GetCheckByNumberPara
 		&i.CountDiffBody,
 		&i.CountDiffEmpty,
 		&i.SeedFailed,
+		&i.CountPages,
 	)
 	return i, err
 }
@@ -750,7 +760,7 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const listCheckRows = `-- name: ListCheckRows :many
-SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor, c.finalize_cursor, c.first_fetch_id, c.progress_known, c.progress_fetched, c.progress_failed, c.progress_discovered, c.count_diff_critical, c.count_diff_seo, c.count_diff_headers, c.count_diff_body, c.count_diff_empty, c.seed_failed,
+SELECT c.id, c.project_id, c.trigger, c.state, c.created_at, c.started_at, c.finished_at, c.settings, c.noise_rules, c.lanes, c.orphan_counting_skipped, c.count_snapshots, c.count_failures, c.count_skipped, c.count_new, c.count_vanished, c.count_retired, c.robots_status, c.robots_body, c.robots_fetched_at, c.robots_failure_kind, c.number, c.plan_cursor, c.finalize_cursor, c.first_fetch_id, c.progress_known, c.progress_fetched, c.progress_failed, c.progress_discovered, c.count_diff_critical, c.count_diff_seo, c.count_diff_headers, c.count_diff_body, c.count_diff_empty, c.seed_failed, c.count_pages,
     (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
           ELSE c.progress_known END)::bigint AS known,
     (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
@@ -807,6 +817,7 @@ type ListCheckRowsRow struct {
 	CountDiffBody         int32
 	CountDiffEmpty        int32
 	SeedFailed            bool
+	CountPages            int32
 	Known                 int64
 	Fetched               int64
 	Failures              int64
@@ -865,6 +876,7 @@ func (q *Queries) ListCheckRows(ctx context.Context, arg ListCheckRowsParams) ([
 			&i.CountDiffBody,
 			&i.CountDiffEmpty,
 			&i.SeedFailed,
+			&i.CountPages,
 			&i.Known,
 			&i.Fetched,
 			&i.Failures,
@@ -1327,7 +1339,7 @@ func (q *Queries) ListSkippedFetchesSparse(ctx context.Context, arg ListSkippedF
 }
 
 const lockCheck = `-- name: LockCheck :one
-SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed FROM checks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, trigger, state, created_at, started_at, finished_at, settings, noise_rules, lanes, orphan_counting_skipped, count_snapshots, count_failures, count_skipped, count_new, count_vanished, count_retired, robots_status, robots_body, robots_fetched_at, robots_failure_kind, number, plan_cursor, finalize_cursor, first_fetch_id, progress_known, progress_fetched, progress_failed, progress_discovered, count_diff_critical, count_diff_seo, count_diff_headers, count_diff_body, count_diff_empty, seed_failed, count_pages FROM checks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
@@ -1369,6 +1381,7 @@ func (q *Queries) LockCheck(ctx context.Context, id int64) (Check, error) {
 		&i.CountDiffBody,
 		&i.CountDiffEmpty,
 		&i.SeedFailed,
+		&i.CountPages,
 	)
 	return i, err
 }
