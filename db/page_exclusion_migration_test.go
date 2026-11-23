@@ -12,7 +12,7 @@ import (
 )
 
 // The migration that stores whether a Page is excluded (ADR 0009).
-const pageExclusionMigration = 46
+const pageExclusionMigration = 47
 
 // Pages that exist before the migration are classified afterwards with no
 // manual step: the migration queues a recompute for every Project that has
