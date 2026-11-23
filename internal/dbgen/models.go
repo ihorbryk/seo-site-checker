@@ -184,6 +184,7 @@ type Project struct {
 	LastCheckNumber int64
 	ExcludeGen      int64
 	ExcludeCursor   int64
+	ExcludeDoneGen  int64
 }
 
 type RiverJob struct {

@@ -535,7 +535,7 @@ func (q *Queries) ListPagePoolRows(ctx context.Context, ids []int64) ([]ListPage
 }
 
 const listProjectSummaries = `-- name: ListProjectSummaries :many
-SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id, p.last_check_number, p.exclude_gen, p.exclude_cursor,
+SELECT p.id, p.domain, p.schedule, p.user_agent, p.timeout_s, p.max_parallel, p.respect_robots, p.custom_headers, p.exclude_patterns, p.created_at, p.owner_id, p.last_check_number, p.exclude_gen, p.exclude_cursor, p.exclude_done_gen,
     (SELECT count(*) FROM pages g WHERE g.project_id = p.id AND g.state = 'active')::bigint AS active_pages,
     COALESCE(lc.number, 0)::bigint AS last_check_number,
     COALESCE(lc.state, '')::text AS last_check_state,
@@ -567,6 +567,7 @@ type ListProjectSummariesRow struct {
 	LastCheckNumber   int64
 	ExcludeGen        int64
 	ExcludeCursor     int64
+	ExcludeDoneGen    int64
 	ActivePages       int64
 	LastCheckNumber_2 int64
 	LastCheckState    string
@@ -604,6 +605,7 @@ func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]Li
 			&i.LastCheckNumber,
 			&i.ExcludeGen,
 			&i.ExcludeCursor,
+			&i.ExcludeDoneGen,
 			&i.ActivePages,
 			&i.LastCheckNumber_2,
 			&i.LastCheckState,
@@ -624,8 +626,42 @@ func (q *Queries) ListProjectSummaries(ctx context.Context, ownerID int64) ([]Li
 	return items, nil
 }
 
+const listUnfinishedExclusions = `-- name: ListUnfinishedExclusions :many
+SELECT p.id FROM projects p
+WHERE p.exclude_gen > p.exclude_done_gen
+  AND NOT EXISTS (
+    SELECT 1 FROM river_job j
+    WHERE j.kind = 'exclude_recompute'
+      AND j.state IN ('available', 'scheduled', 'running', 'retryable', 'pending')
+      AND (j.args->>'project_id')::bigint = p.id)
+ORDER BY p.id
+`
+
+// Projects whose latest recompute has not reached its last Page and that have
+// no job to continue it (ADR 0009): the job was discarded, or was failed by an
+// old worker that does not know the kind.
+func (q *Queries) ListUnfinishedExclusions(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listUnfinishedExclusions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockProjectForExclusion = `-- name: LockProjectForExclusion :one
-SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor FROM projects WHERE id = $1 FOR NO KEY UPDATE
+SELECT id, domain, schedule, user_agent, timeout_s, max_parallel, respect_robots, custom_headers, exclude_patterns, created_at, owner_id, last_check_number, exclude_gen, exclude_cursor, exclude_done_gen FROM projects WHERE id = $1 FOR NO KEY UPDATE
 `
 
 func (q *Queries) LockProjectForExclusion(ctx context.Context, id int64) (Project, error) {
@@ -646,6 +682,7 @@ func (q *Queries) LockProjectForExclusion(ctx context.Context, id int64) (Projec
 		&i.LastCheckNumber,
 		&i.ExcludeGen,
 		&i.ExcludeCursor,
+		&i.ExcludeDoneGen,
 	)
 	return i, err
 }
@@ -687,6 +724,21 @@ type SetExcludeCursorParams struct {
 
 func (q *Queries) SetExcludeCursor(ctx context.Context, arg SetExcludeCursorParams) error {
 	_, err := q.db.Exec(ctx, setExcludeCursor, arg.ID, arg.ExcludeCursor)
+	return err
+}
+
+const setExcludeDone = `-- name: SetExcludeDone :exec
+UPDATE projects SET exclude_done_gen = $2 WHERE id = $1
+`
+
+type SetExcludeDoneParams struct {
+	ID             int64
+	ExcludeDoneGen int64
+}
+
+// The recompute of generation $2 reached the Project's last Page.
+func (q *Queries) SetExcludeDone(ctx context.Context, arg SetExcludeDoneParams) error {
+	_, err := q.db.Exec(ctx, setExcludeDone, arg.ID, arg.ExcludeDoneGen)
 	return err
 }
 

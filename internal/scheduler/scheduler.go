@@ -68,6 +68,53 @@ func startOne(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx],
 	return tx.Commit(ctx)
 }
 
+// RestartExclusions queues the next ExcludeRecompute job of every Project
+// whose recompute is unfinished and has no live job (ADR 0009), and returns
+// how many it queued. The Project's exclude_gen, exclude_done_gen and
+// exclude_cursor say where to resume, so a discarded job (or one an old worker
+// failed during a rollout) loses nothing. A job that runs twice is harmless:
+// it only acts if its cursor is still the Project's.
+func RestartExclusions(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx]) (int, error) {
+	ids, err := dbgen.New(pool).ListUnfinishedExclusions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list unfinished exclusions: %w", err)
+	}
+	n := 0
+	for _, id := range ids {
+		ok, err := restartExclusion(ctx, pool, rc, id)
+		if err != nil {
+			return n, err
+		}
+		if ok {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func restartExclusion(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx], projectID int64) (bool, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	p, err := dbgen.New(tx).LockProjectForExclusion(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if p.ExcludeGen <= p.ExcludeDoneGen {
+		return false, nil // finished since the listing
+	}
+	args := check.ExcludeRecomputeArgs{ProjectID: p.ID, Generation: p.ExcludeGen, AfterPageID: p.ExcludeCursor}
+	if _, err := rc.InsertTx(ctx, tx, args, nil); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 // Housekeep deletes sessions past either expiry. Correctness comes from the
 // session lookup; this only keeps the table small. Kept out of Tick so tests
 // that tick on a fake clock don't expire real sessions.
@@ -88,6 +135,11 @@ func Run(ctx context.Context, pool *pgxpool.Pool, rc *river.Client[pgx.Tx], log 
 			log.Error("scheduler tick", "err", err)
 		} else if n > 0 {
 			log.Info("started scheduled Checks", "count", n)
+		}
+		if n, err := RestartExclusions(ctx, pool, rc); err != nil {
+			log.Error("restart exclude recomputes", "err", err)
+		} else if n > 0 {
+			log.Info("restarted exclude recomputes", "count", n)
 		}
 		select {
 		case <-ctx.Done():

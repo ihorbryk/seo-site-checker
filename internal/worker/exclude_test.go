@@ -134,6 +134,29 @@ func TestExcludeRecomputeHandlesOneBatchPerJob(t *testing.T) {
 	}
 }
 
+// The Project records that a generation's recompute reached its last Page, so
+// the scheduler can tell an unfinished one from a finished one.
+func TestExcludeRecomputeMarksItsGenerationDoneAfterTheLastBatch(t *testing.T) {
+	r := newExcludeRig(t, 19, 10) // 20 Pages: two full batches, then an empty one
+	r.save("/p/1*")
+	done := func() (gen, doneGen int64) {
+		if err := r.pool.QueryRow(context.Background(),
+			`SELECT exclude_gen, exclude_done_gen FROM projects WHERE id = $1`, r.project.ID).Scan(&gen, &doneGen); err != nil {
+			t.Fatal(err)
+		}
+		return gen, doneGen
+	}
+	r.work()
+	r.work()
+	if gen, d := done(); d == gen {
+		t.Fatalf("generation %d marked done before the last batch", gen)
+	}
+	r.work()
+	if gen, d := done(); d != gen {
+		t.Errorf("done generation %d, want %d after the last batch", d, gen)
+	}
+}
+
 // A job River runs twice (a retry after its commit, or the rescuer) changes
 // nothing and chains nothing.
 func TestAnExcludeRecomputeJobRunTwiceChangesNothing(t *testing.T) {
