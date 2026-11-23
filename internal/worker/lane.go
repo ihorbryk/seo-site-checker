@@ -155,8 +155,10 @@ func continueLane(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *d
 	if err != nil {
 		return false, err
 	}
-	err = q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}})
-	return err == nil, err
+	if err := q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // raiseLanes starts extra lanes, each with a Fetch already claimed, while
@@ -200,6 +202,8 @@ func startLane(ctx context.Context, rc *river.Client[pgx.Tx], tx pgx.Tx, q *dbge
 	if err != nil {
 		return false, err
 	}
-	err = q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}})
-	return err == nil, err
+	if err := q.SetFetchJob(ctx, dbgen.SetFetchJobParams{ID: next, JobID: pgtype.Int8{Int64: lane.Job.ID, Valid: true}}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
