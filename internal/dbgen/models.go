@@ -97,6 +97,12 @@ type Check struct {
 	ProgressFetched       int64
 	ProgressFailed        int64
 	ProgressDiscovered    int64
+	CountDiffCritical     int32
+	CountDiffSeo          int32
+	CountDiffHeaders      int32
+	CountDiffBody         int32
+	CountDiffEmpty        int32
+	SeedFailed            bool
 }
 
 type Diff struct {

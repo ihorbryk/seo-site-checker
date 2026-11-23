@@ -1,11 +1,13 @@
 package systemtest_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/ihorbryk/seo-site-checker/internal/dbgen"
 	"github.com/ihorbryk/seo-site-checker/internal/fakesite"
 	"github.com/ihorbryk/seo-site-checker/internal/systemtest"
 )
@@ -161,7 +163,27 @@ func TestLiveProgressShowsNewlyDiscoveredPages(t *testing.T) {
 	s.WaitForCheck(id)
 }
 
-func TestAnIgnoredOrExcludedPageIsLeftOutOfTheChangedList(t *testing.T) {
+// shownCounts is everything the three screens say about one Check's Report:
+// the header, the Changed and New rows, the Checks tab row and the home
+// screen row.
+func shownCounts(s *systemtest.System, p dbgen.Project, id int64) []string {
+	report := s.Page(s.Get(s.CheckPath(id)))
+	got := []string{
+		"header " + text(report, "#report-header .changed") + "/" + text(report, "#report-header .unchanged") + "/" +
+			text(report, "#report-header .new-pages") + "/" + text(report, "#report-header .vanished-count"),
+		"changed " + strings.Join(changedRows(report), ","),
+		"new " + strings.Join(cells(report, "#new"), ","),
+	}
+	row := s.Page(s.Get("/p/" + itoa(p.ID))).Find("#checks tr").Eq(1)
+	got = append(got, "checks tab "+strings.Join(strings.Fields(row.Find(".c-changed, .c-critical, .c-seo").Text()), " "))
+	home := s.Page(s.Get("/"))
+	return append(got, "home "+text(home, ".r-changed")+"/"+text(home, ".r-critical")+"/"+text(home, ".r-seo"))
+}
+
+// A Report is fixed once its Check ends (ADR 0008). This departs from story 78
+// of #19 ("leave ignored and excluded Pages out of the Report") for Pages
+// ignored or excluded after the Check.
+func TestAReportDoesNotChangeWhenAPageIsIgnoredOrExcludedAfterItsCheck(t *testing.T) {
 	s := systemtest.New(t)
 	site := s.Site("shop.test")
 	site.Set("/", html(`<a href="/a">a</a><a href="/b">b</a><a href="/c">c</a>`))
@@ -170,21 +192,27 @@ func TestAnIgnoredOrExcludedPageIsLeftOutOfTheChangedList(t *testing.T) {
 	}
 	p := s.AddProject("shop.test")
 	s.WaitForCheck(s.RunCheck(p))
+	site.Set("/", html(`<a href="/a">a</a><a href="/b">b</a><a href="/c">c</a><a href="/n">n</a>`))
+	site.Set("/n", html(`n`))
 	for _, path := range []string{"/a", "/b", "/c"} {
 		site.Set(path, html(path+" two"))
 	}
 	id := s.RunCheck(p)
 	s.WaitForCheck(id)
+	before := shownCounts(s, p, id)
+	if !strings.HasPrefix(before[0], "header 4/") {
+		t.Fatalf("before: %v", before)
+	}
+
 	s.IgnorePage(s.PageID(p, "https://shop.test/a"))
+	s.IgnorePage(s.PageID(p, "https://shop.test/n"))
 	s.SaveRequestSettings(p, settingsForm("/b\n"))
 
-	report := s.Page(s.Get(s.CheckPath(id)))
-
-	if got := changedRows(report); len(got) != 1 || !strings.HasPrefix(got[0], "https://shop.test/c|") {
-		t.Errorf("changed rows = %v, want only /c", got)
+	if after := shownCounts(s, p, id); !slices.Equal(before, after) {
+		t.Errorf("Report changed after ignoring and excluding Pages:\nbefore %q\nafter  %q", before, after)
 	}
-	if text(report, "#report-header .changed") != "1" || text(report, "#report-header .unchanged") != "1" {
-		t.Errorf("header changed %q unchanged %q, want 1 (/c) and 1 (/)",
-			text(report, "#report-header .changed"), text(report, "#report-header .unchanged"))
+	report := s.Page(s.Get(s.CheckPath(id)))
+	if got := cells(report, "#new"); !slices.Equal(got, []string{"https://shop.test/n"}) {
+		t.Errorf("New Pages = %v, want the Page ignored since", got)
 	}
 }

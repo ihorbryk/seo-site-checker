@@ -149,10 +149,11 @@ SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure'
 SELECT count(*)::bigint FROM checks WHERE project_id = $1;
 
 -- name: ListCheckRows :many
--- One page of the Checks tab: Checks newest first with their progress and,
--- once ended, the Report counts. Changed counts leave out Pages now ignored.
--- Known, Fetched and Failures never count Fetches: an active Check has its
--- running counters, an ended one its stored Fetch outcomes (every Fetch is done).
+-- One page of the Checks tab: Checks newest first with their progress. An
+-- active Check has its running counters, an ended one its stored Fetch
+-- outcomes (every Fetch is done). The Report counts of an ended Check are
+-- columns of the row (ADR 0008): Changed, Critical and SEO are derived from
+-- count_diff_*, seed_failed is stored. Never counts fetches, diffs or snapshots.
 SELECT c.*,
     (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_snapshots + c.count_failures + c.count_skipped
           ELSE c.progress_known END)::bigint AS known,
@@ -160,14 +161,9 @@ SELECT c.*,
           ELSE c.progress_fetched END)::bigint AS fetched,
     (CASE WHEN c.state IN ('finished', 'cancelled') THEN c.count_failures
           ELSE c.progress_failed END)::bigint AS failures,
-    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
-     WHERE s.check_id = c.id AND d.tier <> 'empty' AND g.state <> 'ignored')::bigint AS changed,
-    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
-     WHERE s.check_id = c.id AND d.tier = 'critical' AND g.state <> 'ignored')::bigint AS critical,
-    (SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g ON g.id = s.page_id
-     WHERE s.check_id = c.id AND d.tier = 'seo' AND g.state <> 'ignored')::bigint AS seo,
-    EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
-            WHERE f.check_id = c.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS seed_failed
+    (c.count_diff_critical + c.count_diff_seo + c.count_diff_headers + c.count_diff_body)::bigint AS changed,
+    c.count_diff_critical::bigint AS critical,
+    c.count_diff_seo::bigint AS seo
 FROM checks c WHERE c.project_id = sqlc.arg(project_id)
 ORDER BY c.created_at DESC, c.id DESC
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
@@ -224,16 +220,17 @@ UPDATE checks SET orphan_counting_skipped = true WHERE id = $1;
 
 -- name: ListPageEvents :many
 -- One page of the Pages with the event kind in the Check (new includes
--- reactivated), by URL, leaving out Pages now ignored.
+-- reactivated), by URL. A Report is fixed when its Check ends, so Pages
+-- ignored since stay (ADR 0008).
 SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY(sqlc.arg(kinds)::text[])
+WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[])
 ORDER BY pg.url, e.kind
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: CountPageEvents :one
 -- How many rows ListPageEvents has across all its pages.
 SELECT count(*)::bigint FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND pg.state <> 'ignored' AND e.kind = ANY(sqlc.arg(kinds)::text[]);
+WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[]);
 
 -- name: ListDueProjects :many
 -- Projects whose schedule is due at now: not manual, no active Check, and no
@@ -388,17 +385,32 @@ WHERE f.check_id = sqlc.arg(check_id) AND f.page_id > sqlc.arg(after_id) AND f.p
 ON CONFLICT DO NOTHING;
 
 -- name: AddFinalizeBatchCounts :exec
--- Adds the batch's Fetch outcomes and page events to the Report counts and
--- moves the cursor past it.
+-- Adds the batch's Fetch outcomes, page events and Diff tiers to the Report
+-- counts, sets seed_failed if the batch holds the seed Page and it failed (or
+-- was skipped for a reason other than cancellation), and moves the cursor past
+-- it. Every Diff of the batch counts, whatever its Page's state (ADR 0008). A
+-- Snapshot has its Fetch's id, so the Diffs are read through the batch's Fetches.
 UPDATE checks SET finalize_cursor = sqlc.arg(upto_id)::bigint,
     count_snapshots = count_snapshots + b.snapshots, count_failures = count_failures + b.failures,
     count_skipped = count_skipped + b.skipped,
+    count_diff_critical = count_diff_critical + b.d_critical, count_diff_seo = count_diff_seo + b.d_seo,
+    count_diff_headers = count_diff_headers + b.d_headers, count_diff_body = count_diff_body + b.d_body,
+    count_diff_empty = count_diff_empty + b.d_empty,
+    seed_failed = checks.seed_failed OR b.seed_bad,
     count_new = count_new + e.new, count_vanished = count_vanished + e.vanished, count_retired = count_retired + e.retired
 FROM (
     SELECT count(*) FILTER (WHERE bf.outcome = 'snapshot')::int AS snapshots,
            count(*) FILTER (WHERE bf.outcome = 'failure')::int AS failures,
-           count(*) FILTER (WHERE bf.outcome = 'skipped')::int AS skipped
+           count(*) FILTER (WHERE bf.outcome = 'skipped')::int AS skipped,
+           count(*) FILTER (WHERE bd.tier = 'critical')::int AS d_critical,
+           count(*) FILTER (WHERE bd.tier = 'seo')::int AS d_seo,
+           count(*) FILTER (WHERE bd.tier = 'headers')::int AS d_headers,
+           count(*) FILTER (WHERE bd.tier = 'body')::int AS d_body,
+           count(*) FILTER (WHERE bd.tier = 'empty')::int AS d_empty,
+           COALESCE(bool_or(bp.origin = 'seed' AND (bf.outcome = 'failure' OR (bf.outcome = 'skipped' AND bf.skip_reason <> 'cancelled'))), false) AS seed_bad
     FROM fetches bf
+    JOIN pages bp ON bp.id = bf.page_id
+    LEFT JOIN diffs bd ON bd.snapshot_id = bf.id
     WHERE bf.check_id = sqlc.arg(check_id) AND bf.page_id > sqlc.arg(after_id) AND bf.page_id <= sqlc.arg(upto_id)
 ) b, (
     SELECT count(*) FILTER (WHERE be.kind IN ('new', 'reactivated'))::int AS new,

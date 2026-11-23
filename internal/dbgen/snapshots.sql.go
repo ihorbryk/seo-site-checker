@@ -230,26 +230,22 @@ func (q *Queries) ListCheckDiffRows(ctx context.Context, snapshotIds []int64) ([
 }
 
 const listCheckDiffStates = `-- name: ListCheckDiffStates :many
-SELECT d.snapshot_id, p.url, p.origin, p.state, d.tier
+SELECT d.snapshot_id, p.url, d.tier
 FROM diffs d
 JOIN snapshots s ON s.id = d.snapshot_id
 JOIN pages p ON p.id = s.page_id
-WHERE s.check_id = $1
+WHERE s.check_id = $1 AND d.tier <> 'empty'
 ORDER BY CASE d.tier WHEN 'critical' THEN 0 WHEN 'seo' THEN 1 WHEN 'headers' THEN 2 WHEN 'body' THEN 3 ELSE 4 END, p.url
 `
 
 type ListCheckDiffStatesRow struct {
 	SnapshotID int64
 	Url        string
-	Origin     string
-	State      string
 	Tier       string
 }
 
-// What a Report needs to classify every Diff of a Check (empty ones too) and
-// rank the changed ones: most significant first, then by URL. The caller
-// leaves out Pages now ignored or excluded and splits changed from unchanged;
-// the costly columns come from ListCheckDiffRows for one page of them.
+// What a Report needs to rank the Diffs of a Check: most significant first,
+// then by URL, leaving out the empty ones; the costly columns come from ListCheckDiffRows for one page of them.
 func (q *Queries) ListCheckDiffStates(ctx context.Context, checkID int64) ([]ListCheckDiffStatesRow, error) {
 	rows, err := q.db.Query(ctx, listCheckDiffStates, checkID)
 	if err != nil {
@@ -259,13 +255,7 @@ func (q *Queries) ListCheckDiffStates(ctx context.Context, checkID int64) ([]Lis
 	var items []ListCheckDiffStatesRow
 	for rows.Next() {
 		var i ListCheckDiffStatesRow
-		if err := rows.Scan(
-			&i.SnapshotID,
-			&i.Url,
-			&i.Origin,
-			&i.State,
-			&i.Tier,
-		); err != nil {
+		if err := rows.Scan(&i.SnapshotID, &i.Url, &i.Tier); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

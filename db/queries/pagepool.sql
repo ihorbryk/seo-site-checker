@@ -83,17 +83,13 @@ SELECT p.*,
     COALESCE(lc.number, 0)::bigint AS last_check_number,
     COALESCE(lc.state, '')::text AS last_check_state,
     COALESCE(rc.number, 0)::bigint AS report_check_number,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
-              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier <> 'empty'), 0)::bigint AS report_changed,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
-              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier = 'critical'), 0)::bigint AS report_critical,
-    COALESCE((SELECT count(*) FROM diffs d JOIN snapshots s ON s.id = d.snapshot_id JOIN pages g2 ON g2.id = s.page_id
-              WHERE s.check_id = rc.id AND g2.state <> 'ignored' AND d.tier = 'seo'), 0)::bigint AS report_seo,
+    COALESCE(rc.count_diff_critical + rc.count_diff_seo + rc.count_diff_headers + rc.count_diff_body, 0)::bigint AS report_changed,
+    COALESCE(rc.count_diff_critical, 0)::bigint AS report_critical,
+    COALESCE(rc.count_diff_seo, 0)::bigint AS report_seo,
     COALESCE(rc.count_failures, 0)::bigint AS report_failed,
-    EXISTS (SELECT 1 FROM fetches f JOIN pages g ON g.id = f.page_id
-            WHERE f.check_id = rc.id AND g.origin = 'seed' AND (f.outcome = 'failure' OR (f.outcome = 'skipped' AND f.skip_reason <> 'cancelled'))) AS report_seed_failed
+    COALESCE(rc.seed_failed, false)::boolean AS report_seed_failed
 FROM projects p
 LEFT JOIN LATERAL (SELECT c.id, c.number, c.state FROM checks c WHERE c.project_id = p.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) lc ON true
-LEFT JOIN LATERAL (SELECT c.id, c.number, c.count_failures FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
+LEFT JOIN LATERAL (SELECT c.id, c.number, c.count_failures, c.count_diff_critical, c.count_diff_seo, c.count_diff_headers, c.count_diff_body, c.seed_failed FROM checks c WHERE c.project_id = p.id AND c.state IN ('finished', 'cancelled') ORDER BY c.created_at DESC, c.id DESC LIMIT 1) rc ON true
 WHERE p.owner_id = sqlc.arg(owner_id)
 ORDER BY p.domain;
