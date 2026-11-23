@@ -114,6 +114,7 @@ type Diff struct {
 	BodyChanged    bool
 	SeoChanges     []byte
 	Tier           string
+	CheckID        int64
 }
 
 type DroppedUrl struct {

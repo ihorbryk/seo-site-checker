@@ -122,28 +122,51 @@ FROM fetches f JOIN pages p ON p.id = f.page_id
 WHERE f.check_id = $1 AND f.state = 'in_flight'
 ORDER BY f.id;
 
--- name: ListFetchFailures :many
--- One page of the fetch failures of a Check, by URL, with whether the Page also failed in the
--- Project's previous Check (the newest earlier Check that has ended).
-SELECT p.url, f.failure_kind, f.message,
+-- name: ListFetchFailuresDense :many
+-- One page of the fetch failures of a Check, by URL, with whether the Page also
+-- failed in the Project's previous Check (the newest earlier Check that has
+-- ended). Dense read: the Project's Pages in URL order, each probed for a
+-- failure of the Check (OFFSET 0 keeps the planner from reordering the join).
+SELECT p.url, h.failure_kind, h.message,
     EXISTS (
         SELECT 1 FROM fetches pf
-        WHERE pf.page_id = f.page_id AND pf.outcome = 'failure'
+        WHERE pf.page_id = h.page_id AND pf.outcome = 'failure'
           AND pf.check_id = (
               SELECT c2.id FROM checks c2
+              WHERE c2.project_id = sqlc.arg(project_id) AND c2.id < sqlc.arg(check_id)
+                AND c2.state IN ('finished', 'cancelled')
+              ORDER BY c2.id DESC LIMIT 1)
+    ) AS also_failed_previously
+FROM pages p
+JOIN LATERAL (
+    SELECT f.page_id, f.failure_kind, f.message FROM fetches f
+    WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = p.id AND f.outcome = 'failure'
+    OFFSET 0
+) h ON true
+WHERE p.project_id = sqlc.arg(project_id)
+ORDER BY p.url
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+
+-- name: ListFetchFailuresSparse :many
+-- The same page for a Check with few failures: they come from
+-- fetches_check_outcome_idx and only those are sorted.
+WITH hit AS MATERIALIZED (
+    SELECT f.page_id, f.failure_kind, f.message FROM fetches f
+    WHERE f.check_id = sqlc.arg(check_id) AND f.outcome = 'failure'
+)
+SELECT u.url, hit.failure_kind, hit.message,
+    EXISTS (
+        SELECT 1 FROM fetches pf
+        WHERE pf.page_id = hit.page_id AND pf.outcome = 'failure'
+          AND pf.check_id = (
+              SELECT c2.id FROM checks c2 JOIN checks c ON c.id = sqlc.arg(check_id)
               WHERE c2.project_id = c.project_id AND c2.id < c.id
                 AND c2.state IN ('finished', 'cancelled')
               ORDER BY c2.id DESC LIMIT 1)
     ) AS also_failed_previously
-FROM fetches f
-JOIN checks c ON c.id = f.check_id
-JOIN pages p ON p.id = f.page_id
-WHERE f.check_id = $1 AND f.outcome = 'failure'
-ORDER BY p.url
+FROM hit CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: CountFetchFailures :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'failure';
 
 -- name: CountChecks :one
 SELECT count(*)::bigint FROM checks WHERE project_id = $1;
@@ -221,19 +244,32 @@ ON CONFLICT DO NOTHING;
 -- name: MarkOrphanCountingSkipped :exec
 UPDATE checks SET orphan_counting_skipped = true WHERE id = $1;
 
--- name: ListPageEvents :many
+-- name: ListPageEventsDense :many
 -- One page of the Pages with the event kind in the Check (new includes
 -- reactivated), by URL. A Report is fixed when its Check ends, so Pages
--- ignored since stay (ADR 0008).
-SELECT pg.url, e.kind FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[])
-ORDER BY pg.url, e.kind
+-- ignored since stay (ADR 0008). Dense read: the Project's Pages in URL order,
+-- each probed for an event of the Check.
+SELECT p.url, h.kind FROM pages p
+JOIN LATERAL (
+    SELECT e.kind FROM page_events e
+    WHERE e.check_id = sqlc.arg(check_id) AND e.page_id = p.id AND e.kind = ANY(sqlc.arg(kinds)::text[])
+    OFFSET 0
+) h ON true
+WHERE p.project_id = sqlc.arg(project_id)
+ORDER BY p.url, h.kind
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
--- name: CountPageEvents :one
--- How many rows ListPageEvents has across all its pages.
-SELECT count(*)::bigint FROM page_events e JOIN pages pg ON pg.id = e.page_id
-WHERE e.check_id = $1 AND e.kind = ANY(sqlc.arg(kinds)::text[]);
+-- name: ListPageEventsSparse :many
+-- The same page for a kind with few events: they come from
+-- page_events_check_kind_idx and only those are sorted.
+WITH hit AS MATERIALIZED (
+    SELECT e.page_id, e.kind FROM page_events e
+    WHERE e.check_id = sqlc.arg(check_id) AND e.kind = ANY(sqlc.arg(kinds)::text[])
+)
+SELECT u.url, hit.kind FROM hit
+CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url, hit.kind
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: ListDueProjects :many
 -- Projects whose schedule is due at now: not manual, no active Check, and no
@@ -267,15 +303,30 @@ WHERE id = sqlc.arg(id);
 -- name: FinishFetchSkipped :exec
 UPDATE fetches SET state = 'done', outcome = 'skipped', skip_reason = $2 WHERE id = $1;
 
--- name: ListSkippedFetches :many
--- One page of a Check's skipped Fetches, by URL.
-SELECT p.url, f.skip_reason FROM fetches f JOIN pages p ON p.id = f.page_id
-WHERE f.check_id = $1 AND f.outcome = 'skipped'
+-- name: ListSkippedFetchesDense :many
+-- One page of a Check's skipped Fetches, by URL. Dense read: the Project's
+-- Pages in URL order, each probed for a skipped Fetch of the Check.
+SELECT p.url, h.skip_reason FROM pages p
+JOIN LATERAL (
+    SELECT f.skip_reason FROM fetches f
+    WHERE f.check_id = sqlc.arg(check_id) AND f.page_id = p.id AND f.outcome = 'skipped'
+    OFFSET 0
+) h ON true
+WHERE p.project_id = sqlc.arg(project_id)
 ORDER BY p.url
 LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
--- name: CountSkippedFetches :one
-SELECT count(*)::bigint FROM fetches WHERE check_id = $1 AND outcome = 'skipped';
+-- name: ListSkippedFetchesSparse :many
+-- The same page for a Check with few skipped Fetches: they come from
+-- fetches_check_outcome_idx and only those are sorted.
+WITH hit AS MATERIALIZED (
+    SELECT f.page_id, f.skip_reason FROM fetches f
+    WHERE f.check_id = sqlc.arg(check_id) AND f.outcome = 'skipped'
+)
+SELECT u.url, hit.skip_reason FROM hit
+CROSS JOIN LATERAL (SELECT p.url FROM pages p WHERE p.id = hit.page_id OFFSET 0) u
+ORDER BY u.url
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- FinalizeCheck (ADR 0007) works through a Check's Pages in batches by id:
 -- each batch is the Pages with ids in (after_id, upto_id], bounded by the

@@ -169,7 +169,7 @@ func storeDiff(ctx context.Context, q *dbgen.Queries, chk dbgen.Check, f *dbgen.
 		return err
 	}
 	return q.InsertDiff(ctx, dbgen.InsertDiffParams{
-		SnapshotID: f.ID, BaselineID: prev.ID,
+		SnapshotID: f.ID, CheckID: chk.ID, BaselineID: prev.ID,
 		StatusChanged: sum.StatusChanged, HeadersChanged: sum.HeadersChanged,
 		SeoChanged: sum.SEOChanged, BodyChanged: sum.BodyChanged,
 		SeoChanges: changes, Tier: string(sum.Tier),
